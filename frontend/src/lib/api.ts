@@ -1,5 +1,27 @@
 const BASE_URL = 'http://localhost:5000';
 
+export type Instrument = {
+  instrument_id: number;
+  name: string;
+};
+
+// Public endpoint: instrument choices are needed before an account exists.
+export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]> {
+  const response = await fetch(`${BASE_URL}/instruments`, { signal });
+  if (!response.ok) throw new Error('Unable to load instruments. Please try again.');
+  const data = await response.json();
+  if (!Array.isArray(data.Instruments) || data.Instruments.length === 0) {
+    throw new Error('No instruments are available. Please try again later.');
+  }
+  if (!data.Instruments.every((item: Instrument) =>
+    item && Number.isSafeInteger(item.instrument_id) && item.instrument_id > 0 &&
+    typeof item.name === 'string' && item.name.trim().length > 0
+  )) {
+    throw new Error('Unable to load instruments. Please try again.');
+  }
+  return data.Instruments;
+}
+
 function getToken() {
   return localStorage.getItem('authToken');
 }

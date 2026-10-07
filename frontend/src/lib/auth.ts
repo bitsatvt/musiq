@@ -1,6 +1,7 @@
 "use client"
 
 import { useEffect, useState } from "react"
+import type { Instrument } from "@/lib/api"
 
 const AUTH_TOKEN_KEY = "authToken"
 const AUTH_USER_KEY = "authUser"
@@ -9,6 +10,7 @@ export type AuthUser = {
   user_id: number
   username: string
   email: string
+  instruments: Instrument[]
 }
 
 /* Read the current auth token from localStorage for authenticated requests. */
@@ -40,7 +42,9 @@ export function getAuthUser(): AuthUser | null {
   if (!raw) return null
 
   try {
-    return JSON.parse(raw) as AuthUser
+    const user = JSON.parse(raw) as AuthUser
+    // Older sessions have no instrument list; signup/login supply the current list.
+    return { ...user, instruments: Array.isArray(user.instruments) ? user.instruments : [] }
   } 
   catch {
     return null
