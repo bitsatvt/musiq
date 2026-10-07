@@ -1,3 +1,5 @@
+import type { AuthUser } from './auth';
+
 const BASE_URL = 'http://localhost:5000';
 
 export type Instrument = {
@@ -41,6 +43,23 @@ async function request(path: string, options: RequestInit = {}) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.Error || 'Request failed');
   return data;
+}
+
+// Read the saved profile instead of relying on potentially stale browser storage.
+export async function getProfile(signal?: AbortSignal): Promise<AuthUser> {
+  if (!getToken()) throw new Error('Please log in to edit your instruments.');
+  const data = await request('/users/profile', { signal, cache: 'no-store' });
+  return data.User as AuthUser;
+}
+
+export async function updateInstruments(instrumentIds: number[], signal?: AbortSignal): Promise<AuthUser> {
+  if (!getToken()) throw new Error('Please log in to edit your instruments.');
+  const data = await request('/users/update_instruments', {
+    method: 'POST',
+    body: JSON.stringify({ instrument_ids: instrumentIds }),
+    signal,
+  });
+  return data.User as AuthUser;
 }
 
 // ─── Auth (called by login/signup pages) ──────────────────────────────────────

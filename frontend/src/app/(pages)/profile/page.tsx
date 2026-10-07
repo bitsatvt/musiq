@@ -8,6 +8,7 @@ import {
   dashboardUser,
 } from "@/components/pages/DashboardPage/data"
 import { useAuthUser } from "@/lib/auth"
+import InstrumentSettings from "@/components/pages/AccountGroup/instrument-settings"
 import { Avatar, AvatarFallback } from "@/components/ui/avatar"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
@@ -100,6 +101,8 @@ export default function ProfilePage() {
             </CardContent>
           </Card>
         </section>
+
+        <InstrumentSettings key={authUser?.user_id ?? "signed-out"} />
 
         <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
           {profileStats.map((stat) => {
