@@ -12,7 +12,7 @@ CREATE TABLE `instruments` (
   UNIQUE KEY `instrument_name` (`name`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
--- Keep Piano at ID 1 for the default used until signup supplies a preference.
+-- Instruments supported by the quizzes.
 INSERT INTO `instruments` (`instrument_id`, `name`) VALUES
   (1, 'Piano'), (2, 'Violin'), (3, 'Guitar'), (4, 'Trumpet');
 
@@ -21,14 +21,10 @@ CREATE TABLE `users` (
   `username` varchar(50) NOT NULL,
   `password_hash` varchar(255) NOT NULL,
   `email` varchar(100) NOT NULL,
-  -- Temporary compatibility column until the backend uses user_instruments.
-  `preferred_instrument_id` bigint unsigned NOT NULL DEFAULT 1,
   `creation_date` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
   PRIMARY KEY (`user_id`),
   UNIQUE KEY `username` (`username`),
-  UNIQUE KEY `email` (`email`),
-  CONSTRAINT `fk_users_preferred_instrument` FOREIGN KEY (`preferred_instrument_id`)
-    REFERENCES `instruments` (`instrument_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+  UNIQUE KEY `email` (`email`)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 --
