@@ -1,6 +1,9 @@
 "use client"
 
-import React, { useEffect, useState } from "react"
+import React, { useEffect, useRef, useState } from "react"
+import Link from "next/link"
+import { getProfile, type Instrument } from "@/lib/api"
+import { getAuthToken } from "@/lib/auth"
 import * as Tone from "tone"
 import { Play, ChevronDown, Loader2 } from "lucide-react"
 import { Button } from "@/components/ui/button"
@@ -39,10 +42,64 @@ const INSTRUMENT_SAMPLES: Record<string, Record<string, string>> = {
   }
 }
 
+const QuizWrapper = ({ children }: { children: React.ReactNode }) => (
+  <div className="min-h-screen w-full bg-[#F3F4F9] flex flex-col relative overflow-hidden font-sans">
+    <NavigationHeader />
+    <div className="absolute top-20 inset-x-0 bottom-0 opacity-15 pointer-events-none select-none">
+      <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
+        <defs>
+          <pattern id="staff" width="400" height="240" patternUnits="userSpaceOnUse" patternTransform="rotate(-4)">
+            <g stroke="#6D52A3" strokeWidth="1">
+              <path d="M0 60 H400 M0 80 H400 M0 100 H400 M0 120 H400 M0 140 H400" />
+            </g>
+            <text x="20" y="135" fontSize="80" fill="#6D52A3" opacity="0.4" fontFamily="serif">𝄞</text>
+            <circle cx="160" cy="110" r="6" fill="#6D52A3" opacity="0.3" />
+            <path d="M166 110 V70" stroke="#6D52A3" strokeWidth="2" opacity="0.3" />
+            <circle cx="300" cy="130" r="6" fill="#6D52A3" opacity="0.3" />
+            <path d="M306 130 V90" stroke="#6D52A3" strokeWidth="2" opacity="0.3" />
+          </pattern>
+          <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stopColor="white" stopOpacity="0" />
+            <stop offset="0.1" stopColor="white" stopOpacity="1" />
+            <stop offset="0.8" stopColor="white" stopOpacity="1" />
+            <stop offset="1" stopColor="white" stopOpacity="0" />
+          </linearGradient>
+          <mask id="staff-mask">
+            <rect width="100%" height="100%" fill="url(#fade)" />
+          </mask>
+        </defs>
+        <rect width="100%" height="100%" fill="url(#staff)" mask="url(#staff-mask)" />
+      </svg>
+    </div>
+    <div className="relative z-10 w-full flex-1 flex items-center justify-center p-4">
+      <div className="w-full max-w-4xl">{children}</div>
+    </div>
+  </div>
+)
+
 export default function ToneRecognitionQuiz() {
-  const [sampler, setSampler] = useState<Tone.Sampler | null>(null)
-  const [instrument, setInstrument] = useState("Piano")
-  const [isLoaded, setIsLoaded] = useState(false)
+  const sampler = useRef<Tone.Sampler | null>(null)
+  const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
+  const instrument = selectedInstrument?.name ?? ""
+  const [profile, setProfile] = useState<{
+    status: "loading" | "ready" | "error"
+    instruments: Instrument[]
+    error: string
+  }>({ status: "loading", instruments: [], error: "" })
+  const [profileAttempt, setProfileAttempt] = useState(0)
+  const [audioAttempt, setAudioAttempt] = useState(0)
+  const audioKey = `${instrument}:${audioAttempt}`
+  const [audio, setAudio] = useState<{ key: string; status: "ready" | "error" } | null>(null)
+  const isLoaded = audio?.key === audioKey && audio.status === "ready"
+  const audioError = audio?.key === audioKey && audio.status === "error"
+  const [starting, setStarting] = useState(false)
+  const [startError, setStartError] = useState("")
+  const startRequest = useRef<AbortController | null>(null)
+  const playbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const availableInstruments = profile.instruments.filter((item) =>
+    Object.prototype.hasOwnProperty.call(INSTRUMENT_SAMPLES, item.name))
+  const canStart = profile.status === "ready" && isLoaded && !starting &&
+    availableInstruments.some((item) => item.instrument_id === selectedInstrument?.instrument_id)
 
   // Quiz flow states
   const [started, setStarted] = useState(false)
@@ -60,30 +117,54 @@ export default function ToneRecognitionQuiz() {
 
   const notes = ["C4", "D4", "E4", "F4", "G4", "A4", "B4"]
 
+  // Fetch current selections for each new attempt rather than trusting cached account data.
   useEffect(() => {
-    setIsLoaded(false)
-    if (sampler) sampler.dispose()
+    const controller = new AbortController()
+    const token = getAuthToken()
+    getProfile(controller.signal)
+      .then((user) => {
+        if (controller.signal.aborted) return
+        if (getAuthToken() !== token) throw new Error("Your account changed. Please reload your instruments.")
+        setProfile({ status: "ready", instruments: user.instruments, error: "" })
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setProfile({ status: "error", instruments: [], error: "Unable to load your instruments. Check that you are logged in, then try again." })
+        }
+      })
+    return () => controller.abort()
+  }, [profileAttempt])
 
-    // Sampler interpolates missing notes from C4 and G4
+  // Ignore callbacks from old samplers when switching instruments or leaving the quiz.
+  useEffect(() => {
+    if (!instrument || !Object.prototype.hasOwnProperty.call(INSTRUMENT_SAMPLES, instrument)) return
+    let active = true
     const newSampler = new Tone.Sampler({
       urls: INSTRUMENT_SAMPLES[instrument],
-      onload: () => {
-        // violin is naturally louder than other instruments, so -10dB
-        if (instrument === "Violin") {
-          newSampler.volume.value = -10;
-        } else {
-          newSampler.volume.value = 0; // Reset for other instruments
-        }
-        setIsLoaded(true)
-      }
+      volume: instrument === "Violin" ? -10 : 0,
+      onload: () => { if (active) setAudio({ key: audioKey, status: "ready" }) },
+      onerror: () => { if (active) setAudio({ key: audioKey, status: "error" }) },
     }).toDestination()
-
-    setSampler(newSampler)
-
+    sampler.current = newSampler
     return () => {
+      active = false
       newSampler.dispose()
+      if (sampler.current === newSampler) sampler.current = null
     }
-  }, [instrument])
+  }, [instrument, audioKey])
+
+  useEffect(() => () => {
+    startRequest.current?.abort()
+    if (playbackTimer.current) clearTimeout(playbackTimer.current)
+  }, [])
+
+  const reloadInstruments = () => {
+    setSelectedInstrument(null)
+    setAudio(null)
+    setStartError("")
+    setProfile({ status: "loading", instruments: [], error: "" })
+    setProfileAttempt((attempt) => attempt + 1)
+  }
 
   const generateQuiz = () => {
     const correct = notes[Math.floor(Math.random() * notes.length)]
@@ -101,13 +182,17 @@ export default function ToneRecognitionQuiz() {
   }
 
   const playNote = async () => {
-    await Tone.start()
-    if (!sampler || !isLoaded || !currentNote) return
+    if (!sampler.current || !isLoaded || !currentNote) return
 
     setIsPlaying(true)
-    sampler.triggerAttackRelease(currentNote, "2n")
-
-    setTimeout(() => setIsPlaying(false), 800)
+    try {
+      await Tone.start()
+      sampler.current?.triggerAttackRelease(currentNote, "2n")
+      playbackTimer.current = setTimeout(() => setIsPlaying(false), 800)
+    } catch {
+      setIsPlaying(false)
+      setFeedback("Unable to play audio. Please try Play Note again.")
+    }
   }
 
   const checkAnswer = (choice: string) => {
@@ -131,48 +216,38 @@ export default function ToneRecognitionQuiz() {
     generateQuiz()
   }
 
-  const startQuiz = () => {
-    setStarted(true)
-    setCurrentQuestion(1)
-    setTotalCorrect(0)
-    setFinished(false)
-    generateQuiz()
+  const startQuiz = async () => {
+    if (!canStart || !selectedInstrument || startRequest.current) return
+    const controller = new AbortController()
+    startRequest.current = controller
+    const token = getAuthToken()
+    setStarting(true)
+    setStartError("")
+    try {
+      // Resume audio on the button gesture and recheck membership before starting.
+      await Tone.start()
+      const user = await getProfile(controller.signal)
+      if (controller.signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Reload your instruments before starting.")
+      setProfile({ status: "ready", instruments: user.instruments, error: "" })
+      if (!user.instruments.some((item) => item.instrument_id === selectedInstrument.instrument_id && item.name === instrument)) {
+        setSelectedInstrument(null)
+        throw new Error("Your profile instruments changed. Choose an instrument from the updated list.")
+      }
+      // The selected instrument stays fixed until this attempt is finished.
+      setStarted(true)
+      setCurrentQuestion(1)
+      setTotalCorrect(0)
+      setWrong(false)
+      setFinished(false)
+      generateQuiz()
+    } catch (error) {
+      if (!controller.signal.aborted) setStartError(error instanceof Error ? error.message : "Unable to start the quiz. Please try again.")
+    } finally {
+      startRequest.current = null
+      if (!controller.signal.aborted) setStarting(false)
+    }
   }
-
-  const QuizWrapper = ({ children }: { children: React.ReactNode }) => (
-    <div className="min-h-screen w-full bg-[#F3F4F9] flex flex-col relative overflow-hidden font-sans">
-      <NavigationHeader />
-      <div className="absolute top-20 inset-x-0 bottom-0 opacity-15 pointer-events-none select-none">
-        <svg width="100%" height="100%" xmlns="http://www.w3.org/2000/svg">
-          <defs>
-            <pattern id="staff" width="400" height="240" patternUnits="userSpaceOnUse" patternTransform="rotate(-4)">
-              <g stroke="#6D52A3" strokeWidth="1">
-                <path d="M0 60 H400 M0 80 H400 M0 100 H400 M0 120 H400 M0 140 H400" />
-              </g>
-              <text x="20" y="135" fontSize="80" fill="#6D52A3" opacity="0.4" fontFamily="serif">𝄞</text>
-              <circle cx="160" cy="110" r="6" fill="#6D52A3" opacity="0.3" />
-              <path d="M166 110 V70" stroke="#6D52A3" strokeWidth="2" opacity="0.3" />
-              <circle cx="300" cy="130" r="6" fill="#6D52A3" opacity="0.3" />
-              <path d="M306 130 V90" stroke="#6D52A3" strokeWidth="2" opacity="0.3" />
-            </pattern>
-            <linearGradient id="fade" x1="0" y1="0" x2="0" y2="1">
-              <stop offset="0" stopColor="white" stopOpacity="0" />
-              <stop offset="0.1" stopColor="white" stopOpacity="1" />
-              <stop offset="0.8" stopColor="white" stopOpacity="1" />
-              <stop offset="1" stopColor="white" stopOpacity="0" />
-            </linearGradient>
-            <mask id="staff-mask">
-              <rect width="100%" height="100%" fill="url(#fade)" />
-            </mask>
-          </defs>
-          <rect width="100%" height="100%" fill="url(#staff)" mask="url(#staff-mask)" />
-        </svg>
-      </div>
-      <div className="relative z-10 w-full flex-1 flex items-center justify-center p-4">
-        <div className="w-full max-w-4xl">{children}</div>
-      </div>
-    </div>
-  )
 
   if (!started) {
     return (
@@ -188,37 +263,64 @@ export default function ToneRecognitionQuiz() {
           </CardHeader>
           
           <div className="flex flex-col items-center gap-3 mt-4">
-            <label className="text-xs font-bold text-gray-400 uppercase tracking-widest font-inter">
+            <p id="quiz-instrument-label" className="text-xs font-bold text-gray-400 uppercase tracking-widest font-inter">
               Choose your instrument
-            </label>
+            </p>
+            {profile.status === "loading" && <p role="status">Loading your instruments...</p>}
+            {profile.status === "error" && (
+              <div className="space-y-3">
+                <p role="alert" className="text-red-600">{profile.error}</p>
+                <Button variant="outline" onClick={reloadInstruments}>Retry</Button>
+                <Button variant="link" asChild><Link href="/login">Log in</Link></Button>
+              </div>
+            )}
+            {profile.status === "ready" && availableInstruments.length === 0 && (
+              <p role="status">{profile.instruments.length === 0
+                ? "Select instruments in your profile before starting this quiz."
+                : "None of your profile instruments are supported by this quiz yet. Choose Piano, Violin, Guitar, or Trumpet in your profile."}</p>
+            )}
+            {profile.status === "ready" && availableInstruments.length > 0 && (
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button variant="outline" className="w-56 justify-between border-2 py-6 rounded-xl font-bold font-inter">
-                  {instrument}
+                <Button aria-labelledby="quiz-instrument-label quiz-instrument-value" disabled={starting} variant="outline" className="w-56 justify-between border-2 py-6 rounded-xl font-bold font-inter">
+                  <span id="quiz-instrument-value">{instrument || "Choose an instrument"}</span>
                   <ChevronDown className="ml-2 h-4 w-4 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56 bg-white border-2 rounded-xl shadow-xl">
-                {Object.keys(INSTRUMENT_SAMPLES).map((item) => (
+                {availableInstruments.map((item) => (
                   <DropdownMenuItem 
-                    key={item} 
-                    onClick={() => setInstrument(item)}
+                    key={item.instrument_id}
+                    onClick={() => {
+                      setSelectedInstrument(item)
+                      setAudioAttempt((attempt) => attempt + 1)
+                      setStartError("")
+                    }}
                     className="font-inter font-medium py-3 hover:bg-stone-100 cursor-pointer"
                   >
-                    {item}
+                    {item.name}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
             </DropdownMenu>
+            )}
+            {profile.status === "ready" && <Button variant="link" asChild><Link href="/profile">Edit instruments in profile</Link></Button>}
+            {audioError && (
+              <div className="space-y-2">
+                <p role="alert" className="text-red-600">Unable to load audio for {instrument}.</p>
+                <Button variant="outline" onClick={() => setAudioAttempt((attempt) => attempt + 1)}>Retry audio</Button>
+              </div>
+            )}
+            {startError && <p role="alert" className="text-red-600">{startError}</p>}
           </div>
 
           <CardFooter className="mt-8 flex justify-center">
             <Button 
               onClick={startQuiz}
-              disabled={!isLoaded}
+              disabled={!canStart}
               className="bg-[#6D52A3] hover:bg-[#5A4389] text-white text-xl px-12 py-7 rounded-2xl transition-all shadow-lg font-inter font-bold min-w-[200px]"
             >
-              {!isLoaded ? (
+              {starting ? "Checking profile..." : instrument && !isLoaded && !audioError ? (
                 <>
                   <Loader2 className="mr-2 h-6 w-6 animate-spin" />
                   Loading Audio...
@@ -247,7 +349,10 @@ export default function ToneRecognitionQuiz() {
           </CardHeader>
           <CardFooter className="mt-10 flex justify-center">
             <Button 
-              onClick={() => setStarted(false)}
+              onClick={() => {
+                setStarted(false)
+                reloadInstruments()
+              }}
               className="bg-[#6D52A3] hover:bg-[#5A4389] text-white text-xl px-10 py-6 rounded-xl font-bold font-inter"
             >
               Try Again
