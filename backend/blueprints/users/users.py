@@ -60,7 +60,8 @@ def update_instruments():
     if not isinstance(data, dict):
         return jsonify({"Error": "A JSON object is required"}), 400
     try:
-        user = update_user_instruments(get_jwt_identity(), data.get("instrument_ids"))
+        user_id = get_jwt_identity()
+        user = update_user_instruments(user_id, data.get("instrument_ids"))
     except InstrumentSelectionError as error:
         current_app.logger.warning("Instrument update rejected: %s", error)
         return jsonify({"Error": str(error)}), 400
