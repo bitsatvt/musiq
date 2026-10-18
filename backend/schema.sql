@@ -13,8 +13,8 @@ CREATE TABLE `instruments` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 -- Instruments supported by the quizzes.
-INSERT INTO `instruments` (`instrument_id`, `name`) VALUES
-  (1, 'Piano'), (2, 'Violin'), (3, 'Guitar'), (4, 'Trumpet');
+INSERT INTO `instruments` (`name`) VALUES
+  ('Piano'), ('Violin'), ('Guitar'), ('Trumpet');
 
 CREATE TABLE `users` (
   `user_id` bigint unsigned NOT NULL AUTO_INCREMENT,
