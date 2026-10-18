@@ -36,8 +36,10 @@ def signup():
         new_user = sign_up(data["username"], data["password"], data["email"],
                            data.get("instrument_ids"))
     except InstrumentSelectionError as error:
+        current_app.logger.warning("Signup rejected: %s", error)
         return jsonify({"Error": str(error)}), 400
     except IntegrityError:
+        current_app.logger.warning("Signup rejected due to a database constraint conflict")
         return jsonify({"Error": "Account could not be created. Username or email may already exist, or an instrument is no longer available."}), 400
     except SQLAlchemyError:
         current_app.logger.error("Database failure during signup")
@@ -60,8 +62,10 @@ def update_instruments():
     try:
         user = update_user_instruments(get_jwt_identity(), data.get("instrument_ids"))
     except InstrumentSelectionError as error:
+        current_app.logger.warning("Instrument update rejected: %s", error)
         return jsonify({"Error": str(error)}), 400
     except IntegrityError:
+        current_app.logger.warning("Instrument update rejected due to a database constraint conflict")
         return jsonify({"Error": "An instrument is no longer available. Reload and try again."}), 409
     except SQLAlchemyError:
         current_app.logger.error("Database failure while updating instruments")
