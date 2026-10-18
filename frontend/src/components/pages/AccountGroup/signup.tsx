@@ -17,6 +17,7 @@ import { useEffect, useState } from "react"
 import Link from "next/link"
 import { setAuthSession } from "@/lib/auth"
 import { getInstruments, type Instrument } from "@/lib/api"
+import InstrumentSelector from "@/components/shared/InstrumentSelector"
 
 export default function SignupCard() {
   const router = useRouter()
@@ -57,13 +58,6 @@ export default function SignupCard() {
   const hasValidSelection = instrumentIds.length > 0 && instrumentIds.every(
     (id) => instruments.some((instrument) => instrument.instrument_id === id)
   )
-
-  // Add or remove an instrument without changing the other selections.
-  const toggleInstrument = (id: number) => {
-    setInstrumentIds((selected) => selected.includes(id)
-      ? selected.filter((selectedId) => selectedId !== id)
-      : [...selected, id])
-  }
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
@@ -172,38 +166,16 @@ export default function SignupCard() {
               </div>
                 
               <div className="grid gap-2">
-                <fieldset
+                <InstrumentSelector
+                  instruments={instruments}
+                  selectedIds={instrumentIds}
+                  onChange={setInstrumentIds}
+                  label="Instruments to practice"
+                  description="Select at least one instrument. You can choose more than one."
+                  loading={isLoadingInstruments}
                   disabled={isLoadingInstruments || !!instrumentError || isSubmitting}
-                  aria-describedby="instrument-help"
-                  className="min-w-0 disabled:opacity-50"
-                >
-                  <legend className="mb-2 text-sm font-medium">Instruments to practice</legend>
-                  {isLoadingInstruments ? (
-                    <p role="status" className="text-muted-foreground text-sm">Loading instruments...</p>
-                  ) : (
-                    <div className="grid grid-cols-2 gap-2">
-                      {instruments.map((instrument) => (
-                        <label
-                          key={instrument.instrument_id}
-                          className="border-input flex items-center gap-2 rounded-md border p-3 text-sm"
-                        >
-                          <input
-                            type="checkbox"
-                            name="instrument_ids"
-                            value={instrument.instrument_id}
-                            checked={instrumentIds.includes(instrument.instrument_id)}
-                            onChange={() => toggleInstrument(instrument.instrument_id)}
-                            className="accent-primary size-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                          />
-                          {instrument.name}
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </fieldset>
-                <p id="instrument-help" className="text-muted-foreground text-sm">
-                  Select at least one instrument. You can choose more than one.
-                </p>
+                  gridClassName="grid-cols-2 gap-2"
+                />
                 {instrumentError && (
                   <div className="grid gap-2">
                     <p role="alert" className="text-sm text-red-500">{instrumentError}</p>

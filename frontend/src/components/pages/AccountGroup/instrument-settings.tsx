@@ -6,6 +6,7 @@ import { getInstruments, getProfile, updateInstruments, type Instrument } from "
 import { getAuthToken, updateAuthUser } from "@/lib/auth"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import InstrumentSelector from "@/components/shared/InstrumentSelector"
 
 export default function InstrumentSettings() {
   const [options, setOptions] = useState<Instrument[]>([])
@@ -96,28 +97,18 @@ export default function InstrumentSettings() {
           </div>
         ) : (
           <form onSubmit={handleSave} className="space-y-4">
-            <fieldset disabled={saving} aria-describedby="profile-instruments-help" className="disabled:opacity-50">
-              <legend className="mb-3 text-sm font-medium">Your instruments</legend>
-              <div className="grid gap-3 sm:grid-cols-2">
-                {options.map((instrument) => (
-                  <label key={instrument.instrument_id} className="border-input flex items-center gap-3 rounded-md border p-3 text-sm">
-                    <input type="checkbox" name="instrument_ids" value={instrument.instrument_id}
-                      checked={selectedIds.includes(instrument.instrument_id)}
-                      onChange={() => {
-                        setSelectedIds((ids) => ids.includes(instrument.instrument_id)
-                          ? ids.filter((id) => id !== instrument.instrument_id)
-                          : [...ids, instrument.instrument_id])
-                        setSaved(false)
-                        setSaveError("")
-                      }}
-                      className="accent-primary size-4 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
-                    />
-                    {instrument.name}
-                  </label>
-                ))}
-              </div>
-            </fieldset>
-            <p id="profile-instruments-help" className="text-muted-foreground text-sm">Select at least one instrument, then save your changes.</p>
+            <InstrumentSelector
+              instruments={options}
+              selectedIds={selectedIds}
+              onChange={(ids) => {
+                setSelectedIds(ids)
+                setSaved(false)
+                setSaveError("")
+              }}
+              label="Your instruments"
+              description="Select at least one instrument, then save your changes."
+              disabled={saving}
+            />
             {saveError && <p role="alert" className="text-sm text-red-500">{saveError}</p>}
             {saved && <p role="status" className="text-sm text-green-600">Your instruments have been saved.</p>}
             <Button type="submit" disabled={saving || !validSelection || !hasChanges}>
