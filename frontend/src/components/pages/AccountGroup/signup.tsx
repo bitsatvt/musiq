@@ -13,9 +13,11 @@ import {
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { useRouter } from "next/navigation"
-import { useState } from "react"
+import { useEffect, useState } from "react"
 import Link from "next/link"
 import { setAuthSession } from "@/lib/auth"
+import { getInstruments, type Instrument } from "@/lib/api"
+import InstrumentSelector from "@/components/shared/InstrumentSelector"
 
 export default function SignupCard() {
   const router = useRouter()
@@ -28,11 +30,45 @@ export default function SignupCard() {
   const [errorMessage, setErrorMessage] = useState("")
   const [successMessage, setSuccessMessage] = useState("")
   const [isSubmitting, setIsSubmitting] = useState(false)
+  const [instruments, setInstruments] = useState<Instrument[]>([])
+  const [instrumentIds, setInstrumentIds] = useState<number[]>([])
+  const [isLoadingInstruments, setIsLoadingInstruments] = useState(true)
+  const [instrumentError, setInstrumentError] = useState("")
+  const [instrumentLoadAttempt, setInstrumentLoadAttempt] = useState(0)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    getInstruments(controller.signal)
+      .then((options) => {
+        if (!controller.signal.aborted) setInstruments(options)
+      })
+      .catch((error: unknown) => {
+        if (!controller.signal.aborted) {
+          setInstrumentError(error instanceof Error
+            ? error.message
+            : "Unable to load instruments. Please try again.")
+        }
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setIsLoadingInstruments(false)
+      })
+    return () => controller.abort()
+  }, [instrumentLoadAttempt])
+
+  const hasValidSelection = instrumentIds.length > 0 && instrumentIds.every(
+    (id) => instruments.some((instrument) => instrument.instrument_id === id)
+  )
 
   const handleSubmit = async (event: React.FormEvent) => {
     event.preventDefault()
     setErrorMessage("")
     setSuccessMessage("")
+
+    if (isSubmitting) return
+    if (isLoadingInstruments || instrumentError || !hasValidSelection) {
+      setErrorMessage("Please select at least one available instrument.")
+      return
+    }
 
     if (password !== confirmPassword) {
       setErrorMessage("Passwords do not match.")
@@ -47,7 +83,10 @@ export default function SignupCard() {
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ username, email, password }),
+        body: JSON.stringify({
+          username, email, password,
+          instrument_ids: instrumentIds,
+        }),
       })
 
       const payload = await response.json()
@@ -84,7 +123,7 @@ export default function SignupCard() {
           </CardTitle>
             
           <CardDescription>
-            Create your account with a username, email, and password.
+            Create your account and choose the instruments you want to practice.
           </CardDescription>
             
           <CardAction>
@@ -126,6 +165,35 @@ export default function SignupCard() {
                 />
               </div>
                 
+              <div className="grid gap-2">
+                <InstrumentSelector
+                  instruments={instruments}
+                  selectedIds={instrumentIds}
+                  onChange={setInstrumentIds}
+                  label="Instruments to practice"
+                  description="Select at least one instrument. You can choose more than one."
+                  loading={isLoadingInstruments}
+                  disabled={isLoadingInstruments || !!instrumentError || isSubmitting}
+                  gridClassName="grid-cols-2 gap-2"
+                />
+                {instrumentError && (
+                  <div className="grid gap-2">
+                    <p role="alert" className="text-sm text-red-500">{instrumentError}</p>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      onClick={() => {
+                        setInstrumentError("")
+                        setIsLoadingInstruments(true)
+                        setInstrumentLoadAttempt((attempt) => attempt + 1)
+                      }}
+                    >
+                      Retry loading instruments
+                    </Button>
+                  </div>
+                )}
+              </div>
+
               {/* Password Input */}
               <div className="grid gap-2">
                   
@@ -153,7 +221,7 @@ export default function SignupCard() {
               </div>
 
               {errorMessage ? (
-                <p className="text-sm text-red-500">{errorMessage}</p>
+                <p role="alert" className="text-sm text-red-500">{errorMessage}</p>
               ) : null}
 
               {successMessage ? (
@@ -164,7 +232,9 @@ export default function SignupCard() {
             
             {/* Footer */}
             <CardFooter className="flex-col gap-2 px-0 pt-6">
-              <Button type="submit" className="w-full" disabled={isSubmitting}>
+              <Button type="submit" className="w-full" disabled={
+                isSubmitting || isLoadingInstruments || !!instrumentError || !hasValidSelection
+              }>
                 {isSubmitting ? "Creating account..." : "Create account"}
               </Button>
 

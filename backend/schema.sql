@@ -1,7 +1,20 @@
 USE music_app_db;
+DROP TABLE IF EXISTS `user_instruments`;
 DROP TABLE IF EXISTS `friends`;
 DROP TABLE IF EXISTS `friend_requests`;
 DROP TABLE IF EXISTS `users`;
+DROP TABLE IF EXISTS `instruments`;
+
+CREATE TABLE `instruments` (
+  `instrument_id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `name` varchar(50) NOT NULL,
+  PRIMARY KEY (`instrument_id`),
+  UNIQUE KEY `instrument_name` (`name`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- Instruments supported by the quizzes.
+INSERT INTO `instruments` (`name`) VALUES
+  ('Piano'), ('Violin'), ('Guitar'), ('Trumpet');
 
 CREATE TABLE `users` (
   `user_id` bigint unsigned NOT NULL AUTO_INCREMENT,
@@ -15,9 +28,21 @@ CREATE TABLE `users` (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 --
--- Table structure for table `friends`
+-- Table structure for table `user_instruments`
 --
 
+CREATE TABLE `user_instruments` (
+  `user_id` bigint unsigned NOT NULL,
+  `instrument_id` bigint unsigned NOT NULL,
+  PRIMARY KEY (`user_id`, `instrument_id`),
+  KEY `fk_user_instruments_instrument` (`instrument_id`),
+  CONSTRAINT `fk_user_instruments_user` FOREIGN KEY (`user_id`)
+    REFERENCES `users` (`user_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT `fk_user_instruments_instrument` FOREIGN KEY (`instrument_id`)
+    REFERENCES `instruments` (`instrument_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+-- Table structure for table `friends`
 CREATE TABLE `friends` (
   `friendship_id` bigint unsigned NOT NULL AUTO_INCREMENT,
   `user_id` bigint unsigned NOT NULL,
@@ -46,4 +71,3 @@ CREATE TABLE `friend_requests` (
   CONSTRAINT `fk_fr_receiver` FOREIGN KEY (`receiver_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE,
   CONSTRAINT `fk_fr_requester` FOREIGN KEY (`requester_id`) REFERENCES `users` (`user_id`) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
-

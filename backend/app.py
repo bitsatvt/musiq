@@ -1,5 +1,5 @@
 from flask import Flask
-from blueprints.users.users import users
+from blueprints.users.users import users, instruments
 from blueprints.friends.friends import friends
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
@@ -25,6 +25,7 @@ app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(hours=1)
 jwt = JWTManager(app)
 
 app.register_blueprint(users, url_prefix="/users")
+app.register_blueprint(instruments, url_prefix="/instruments")
 app.register_blueprint(friends, url_prefix="/friends")
 
 if __name__ == '__main__':

@@ -1,8 +1,24 @@
-from flask import Blueprint, request, jsonify
+from flask import Blueprint, request, jsonify, current_app
+from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 from .user_db import *
 from flask_jwt_extended import create_access_token, jwt_required, get_jwt_identity
 
 users = Blueprint("users", __name__)
+instruments = Blueprint("instruments", __name__)
+
+
+def serialize_user(user):
+    return {
+        "user_id": user["user_id"],
+        "username": user["username"],
+        "email": user["email"],
+        "instruments": user["instruments"],
+    }
+
+
+@instruments.get("")
+def list_instruments():
+    return jsonify({"Instruments": [dict(row) for row in get_instruments()]}), 200
 
 '''
     Endpoint for creating a new user and inserting into the database,
@@ -10,26 +26,59 @@ users = Blueprint("users", __name__)
 '''
 @users.post('/signup')
 def signup():
-    data = request.json
-    new_user = sign_up(data["username"], data["password"], data["email"])
-    if not new_user:
-        return jsonify({"Error": "Sign Up Failed, Username or email already exists"}), 400
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"Error": "A JSON object is required"}), 400
+    for field in ("username", "password", "email"):
+        if not isinstance(data.get(field), str) or not data[field].strip():
+            return jsonify({"Error": f"{field} is required"}), 400
+    try:
+        new_user = sign_up(data["username"], data["password"], data["email"],
+                           data.get("instrument_ids"))
+    except InstrumentSelectionError as error:
+        current_app.logger.warning("Signup rejected: %s", error)
+        return jsonify({"Error": str(error)}), 400
+    except IntegrityError:
+        current_app.logger.warning("Signup rejected due to a database constraint conflict")
+        return jsonify({"Error": "Account could not be created. Username or email may already exist, or an instrument is no longer available."}), 400
+    except SQLAlchemyError:
+        current_app.logger.error("Database failure during signup")
+        return jsonify({"Error": "Unable to create account. Please try again."}), 500
 
     access_token = create_access_token(identity=str(new_user["user_id"]))
 
     return jsonify({"Message": "Account creation successful!",
-                    "User": {
-                        "user_id": new_user["user_id"],
-                        "username": new_user["username"],
-                        "email": new_user["email"]
-                    },
+                    "User": serialize_user(new_user),
                     "Token": access_token}), 201
 
 
+# Replace the authenticated user's complete instrument selection atomically.
+@users.post('/update_instruments')
+@jwt_required()
+def update_instruments():
+    data = request.get_json(silent=True)
+    if not isinstance(data, dict):
+        return jsonify({"Error": "A JSON object is required"}), 400
+    try:
+        user_id = get_jwt_identity()
+        user = update_user_instruments(user_id, data.get("instrument_ids"))
+    except InstrumentSelectionError as error:
+        current_app.logger.warning("Instrument update rejected: %s", error)
+        return jsonify({"Error": str(error)}), 400
+    except IntegrityError:
+        current_app.logger.warning("Instrument update rejected due to a database constraint conflict")
+        return jsonify({"Error": "An instrument is no longer available. Reload and try again."}), 409
+    except SQLAlchemyError:
+        current_app.logger.error("Database failure while updating instruments")
+        return jsonify({"Error": "Unable to save instruments. Please try again."}), 500
+    if user is None:
+        return jsonify({"Error": "The user cannot be found"}), 404
+    return jsonify({"Message": "Instruments updated successfully!",
+                    "User": serialize_user(user)}), 200
+
+
 '''
-    Endpoint for logging into the application, returns a user 
-    dictionary for user logged in, a message stating login status,
-    and a token for authentication
+    Log in and return account information, instruments, and an access token.
 '''
 @users.post('/login')
 def login():
@@ -41,11 +90,7 @@ def login():
     access_token = create_access_token(identity=str(user["user_id"]))
 
     return jsonify({"Message": "Login Successful!",
-                    "User": {
-                        "user_id": user["user_id"],
-                        "username": user["username"],
-                        "email": user["email"]
-                    },
+                    "User": serialize_user(user),
                     "Token": access_token}), 200
 
 
@@ -122,11 +167,7 @@ def profile():
     user_id = get_jwt_identity()
     user = get_user_by_id(user_id)
     if not user:
-        return jsonify({"Error": "Authentication error, user not retrieved"})
-    safe_user = {
-        "user_id": user["user_id"],
-        "username": user["username"],
-        "email": user["email"],
-    }
+        return jsonify({"Error": "Authentication error, user not retrieved"}), 404
+    safe_user = serialize_user(user)
     return jsonify({"Message": "User successfully retrieved!",
                     "User": safe_user})

@@ -1,4 +1,28 @@
+import type { AuthUser } from './auth';
+
 const BASE_URL = 'http://localhost:5000';
+
+export type Instrument = {
+  instrument_id: number;
+  name: string;
+};
+
+// Public endpoint: instrument choices are needed before an account exists.
+export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]> {
+  const response = await fetch(`${BASE_URL}/instruments`, { signal });
+  if (!response.ok) throw new Error('Unable to load instruments. Please try again.');
+  const data = await response.json();
+  if (!Array.isArray(data.Instruments) || data.Instruments.length === 0) {
+    throw new Error('No instruments are available. Please try again later.');
+  }
+  if (!data.Instruments.every((item: Instrument) =>
+    item && Number.isSafeInteger(item.instrument_id) && item.instrument_id > 0 &&
+    typeof item.name === 'string' && item.name.trim().length > 0
+  )) {
+    throw new Error('Unable to load instruments. Please try again.');
+  }
+  return data.Instruments;
+}
 
 function getToken() {
   return localStorage.getItem('authToken');
@@ -19,6 +43,23 @@ async function request(path: string, options: RequestInit = {}) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.Error || 'Request failed');
   return data;
+}
+
+// Read the saved profile instead of relying on potentially stale browser storage.
+export async function getProfile(signal?: AbortSignal): Promise<AuthUser> {
+  if (!getToken()) throw new Error('Please log in to edit your instruments.');
+  const data = await request('/users/profile', { signal, cache: 'no-store' });
+  return data.User as AuthUser;
+}
+
+export async function updateInstruments(instrumentIds: number[], signal?: AbortSignal): Promise<AuthUser> {
+  if (!getToken()) throw new Error('Please log in to edit your instruments.');
+  const data = await request('/users/update_instruments', {
+    method: 'POST',
+    body: JSON.stringify({ instrument_ids: instrumentIds }),
+    signal,
+  });
+  return data.User as AuthUser;
 }
 
 // ─── Auth (called by login/signup pages) ──────────────────────────────────────
