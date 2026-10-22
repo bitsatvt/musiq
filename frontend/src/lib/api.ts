@@ -62,6 +62,36 @@ export async function updateInstruments(instrumentIds: number[], signal?: AbortS
   return data.User as AuthUser;
 }
 
+export type ToneQuizState = {
+  quiz_id: string;
+  current_question: number;
+  total_correct: number;
+  finished: boolean;
+  note: string;
+  choices: string[];
+  answered_correctly: boolean;
+};
+
+// Start a quiz and retrieve its ID and first question.
+export async function startToneQuiz(signal?: AbortSignal): Promise<ToneQuizState> {
+  return request('/quizzes/tone-recognition/start', { method: 'POST', signal });
+}
+
+// Submit an answer or request the next question from the backend.
+export async function updateToneQuiz(
+  quizId: string,
+  action: 'answer' | 'next',
+  currentQuestion: number,
+  choice?: string,
+  signal?: AbortSignal,
+): Promise<ToneQuizState> {
+  return request(`/quizzes/tone-recognition/${quizId}/${action}`, {
+    method: 'POST',
+    body: JSON.stringify({ current_question: currentQuestion, choice }),
+    signal,
+  });
+}
+
 // ─── Auth (called by login/signup pages) ──────────────────────────────────────
 // POST /users/login    → { Message, Token, User: { user_id, username } }
 // POST /users/signup   → { Message, Token, User: { user_id, username } }

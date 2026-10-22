@@ -1,6 +1,7 @@
 from flask import Flask
 from blueprints.users.users import users, instruments
 from blueprints.friends.friends import friends
+from blueprints.quizzes.tone_recognition import quizzes
 from flask_jwt_extended import JWTManager
 from flask_cors import CORS
 from dotenv import load_dotenv
@@ -27,6 +28,7 @@ jwt = JWTManager(app)
 app.register_blueprint(users, url_prefix="/users")
 app.register_blueprint(instruments, url_prefix="/instruments")
 app.register_blueprint(friends, url_prefix="/friends")
+app.register_blueprint(quizzes, url_prefix="/quizzes")
 
 if __name__ == '__main__':
     app.run(host='0.0.0.0', debug=True)

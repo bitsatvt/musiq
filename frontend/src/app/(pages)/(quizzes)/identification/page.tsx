@@ -2,7 +2,7 @@
 
 import React, { useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { getProfile, type Instrument } from "@/lib/api"
+import { getProfile, startToneQuiz, updateToneQuiz, type Instrument, type ToneQuizState } from "@/lib/api"
 import { getAuthToken } from "@/lib/auth"
 import * as Tone from "tone"
 import { Play, ChevronDown, Loader2 } from "lucide-react"
@@ -95,6 +95,9 @@ export default function ToneRecognitionQuiz() {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState("")
   const startRequest = useRef<AbortController | null>(null)
+  const quizRequest = useRef<AbortController | null>(null)
+  const quizActions = useRef(Promise.resolve())
+  const quizGeneration = useRef(0)
   const playbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const availableInstruments = profile.instruments.filter((item) =>
     Object.prototype.hasOwnProperty.call(INSTRUMENT_SAMPLES, item.name))
@@ -106,7 +109,7 @@ export default function ToneRecognitionQuiz() {
   const [currentQuestion, setCurrentQuestion] = useState(1)
   const [totalCorrect, setTotalCorrect] = useState(0)
   const [finished, setFinished] = useState(false)
-  const [wrong, setWrong] = useState(false)
+  const [quizId, setQuizId] = useState("")
 
   // Question states
   const [currentNote, setCurrentNote] = useState("")
@@ -114,8 +117,6 @@ export default function ToneRecognitionQuiz() {
   const [feedback, setFeedback] = useState("")
   const [answeredCorrectly, setAnsweredCorrectly] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-
-  const notes = ["C4", "D4", "E4", "F4", "G4", "A4", "B4"]
 
   // Fetch current selections for each new attempt rather than trusting cached account data.
   useEffect(() => {
@@ -155,10 +156,13 @@ export default function ToneRecognitionQuiz() {
 
   useEffect(() => () => {
     startRequest.current?.abort()
+    quizRequest.current?.abort()
+    quizGeneration.current += 1
     if (playbackTimer.current) clearTimeout(playbackTimer.current)
   }, [])
 
   const reloadInstruments = () => {
+    quizGeneration.current += 1
     setSelectedInstrument(null)
     setAudio(null)
     setStartError("")
@@ -166,19 +170,15 @@ export default function ToneRecognitionQuiz() {
     setProfileAttempt((attempt) => attempt + 1)
   }
 
-  const generateQuiz = () => {
-    const correct = notes[Math.floor(Math.random() * notes.length)]
-    const incorrect = notes
-      .filter((n) => n !== correct)
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 3)
-
-    const allChoices = [...incorrect, correct].sort(() => 0.5 - Math.random())
-
-    setCurrentNote(correct)
-    setChoices(allChoices)
-    setFeedback("")
-    setAnsweredCorrectly(false)
+  // Sync the displayed question and score with the backend response.
+  const applyQuizState = (quiz: ToneQuizState) => {
+    setQuizId(quiz.quiz_id)
+    setCurrentQuestion(quiz.current_question)
+    setTotalCorrect(quiz.total_correct)
+    setFinished(quiz.finished)
+    setCurrentNote(quiz.note)
+    setChoices(quiz.choices)
+    setAnsweredCorrectly(quiz.answered_correctly)
   }
 
   const playNote = async () => {
@@ -195,27 +195,36 @@ export default function ToneRecognitionQuiz() {
     }
   }
 
-  const checkAnswer = (choice: string) => {
-    if (choice === currentNote) {
-      setFeedback("Correct!")
-      setAnsweredCorrectly(true)
-      if (!wrong) setTotalCorrect((prev) => prev + 1)
-      setWrong(false)
-    } else {
-      setFeedback("Try again")
-      setWrong(true)
+  // Send one quiz action and display its result or request error.
+  const submitQuizAction = async (action: "answer" | "next", choice?: string) => {
+    const controller = new AbortController()
+    quizRequest.current = controller
+    const token = getAuthToken()
+    try {
+      const quiz = await updateToneQuiz(quizId, action, currentQuestion, choice, controller.signal)
+      if (controller.signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Please reload the quiz.")
+      applyQuizState(quiz)
+      setFeedback(action === "answer" ? (quiz.answered_correctly ? "Correct!" : "Try again") : "")
+    } catch (error) {
+      if (!controller.signal.aborted) setFeedback(error instanceof Error ? error.message : "Unable to update the quiz. Please try again.")
+    } finally {
+      quizRequest.current = null
     }
   }
 
-  const nextQuestion = () => {
-    if (currentQuestion === 10) {
-      setFinished(true)
-      return
-    }
-    setCurrentQuestion((prev) => prev + 1)
-    generateQuiz()
+  // Process clicks in order and skip queued actions after a reset or unmount.
+  const queueQuizAction = (action: "answer" | "next", choice?: string) => {
+    const generation = quizGeneration.current
+    quizActions.current = quizActions.current.then(async () => {
+      if (generation === quizGeneration.current) await submitQuizAction(action, choice)
+    })
   }
 
+  const checkAnswer = (choice: string) => queueQuizAction("answer", choice)
+  const nextQuestion = () => queueQuizAction("next")
+
+  // Recheck the selected instrument before requesting a new backend quiz.
   const startQuiz = async () => {
     if (!canStart || !selectedInstrument || startRequest.current) return
     const controller = new AbortController()
@@ -234,13 +243,13 @@ export default function ToneRecognitionQuiz() {
         setSelectedInstrument(null)
         throw new Error("Your profile instruments changed. Choose an instrument from the updated list.")
       }
+      const quiz = await startToneQuiz(controller.signal)
+      if (controller.signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Reload your instruments before starting.")
       // The selected instrument stays fixed until this attempt is finished.
+      applyQuizState(quiz)
       setStarted(true)
-      setCurrentQuestion(1)
-      setTotalCorrect(0)
-      setWrong(false)
-      setFinished(false)
-      generateQuiz()
+      setFeedback("")
     } catch (error) {
       if (!controller.signal.aborted) setStartError(error instanceof Error ? error.message : "Unable to start the quiz. Please try again.")
     } finally {
