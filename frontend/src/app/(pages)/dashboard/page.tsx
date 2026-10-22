@@ -47,7 +47,7 @@ export default function DashboardPage() {
   const recentQuizzes = dashboardQuizHistory.slice(0, 3)
   const topFriends = dashboardFriends.filter((friend) => friend.status === "online").slice(0, 3)
   const leaderboard = dashboardLeaderboard.map((entry) =>
-    entry.isCurrentUser ? { ...entry, id: currentUser.id, name: authUser?.username ?? entry.name } : entry
+    entry.isCurrentUser ? { ...entry, name: authUser?.username ?? entry.name } : entry
   )
   const stats = [
     {
