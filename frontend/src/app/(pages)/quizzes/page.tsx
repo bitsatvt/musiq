@@ -18,9 +18,9 @@ const quizCatalog = [
     bestScore: 98,
   },
   {
-    id: "notation-reading",
-    title: "Notation Reading",
-    description: "Read notes from the staff and sharpen sight-reading.",
+    id: "staff-placement",
+    title: "Staff Placement Quiz",
+    description: "Place notes on an instrument-specific staff and build sight-reading skills.",
     gradient: "from-sky-500 via-cyan-500 to-teal-600",
     icon: FileMusic,
     completed: 72,
@@ -126,10 +126,11 @@ export default function QuizzesPage() {
                       <p className="text-muted-foreground text-xs">Best</p>
                     </div>
                   </div>
-                  {/* to be changed when more quizzes are made */}
-                  <Button className="w-full" asChild={quiz.id === "tone-recognition"}>
+                  <Button className="w-full" asChild={quiz.id === "tone-recognition" || quiz.id === "staff-placement"}>
                     {quiz.id === "tone-recognition" ? (
                       <Link href="/identification">Start quiz</Link>
+                    ) : quiz.id === "staff-placement" ? (
+                      <Link href="/staff-placement">Start quiz</Link>
                     ) : (
                       "Start quiz"
                     )}
@@ -171,6 +172,7 @@ export default function QuizzesPage() {
           </Card>
         </section>
       </div>
+
     </main>
   )
 }
