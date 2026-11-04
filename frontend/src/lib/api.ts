@@ -62,6 +62,69 @@ export async function updateInstruments(instrumentIds: number[], signal?: AbortS
   return data.User as AuthUser;
 }
 
+export type ToneRecognitionQuestion = {
+  note: string;
+  choices: string[];
+};
+
+export type QuizAttempt<Question = ToneRecognitionQuestion> = {
+  attempt_id: string;
+  quiz_type: string;
+  instrument_id: number;
+  question_number: number;
+  total_questions: number;
+  question: Question;
+  first_try_correct: number;
+  answered_correctly: boolean;
+  completed: boolean;
+};
+
+export type QuizAnswerResult<Question = ToneRecognitionQuestion> = QuizAttempt<Question> & {
+  is_correct: boolean;
+};
+
+// Start an attempt and retrieve the first question from the backend.
+export async function startQuizAttempt<Question = ToneRecognitionQuestion>(
+  quizType: string, instrumentId: number, signal?: AbortSignal,
+): Promise<QuizAttempt<Question>> {
+  return request('/quizzes/start', {
+    method: 'POST',
+    body: JSON.stringify({ quiz_type: quizType, instrument_id: instrumentId }),
+    signal,
+  });
+}
+
+// Submit a guess for the current question; scoring stays on the backend.
+export async function submitQuizAnswer<Question = ToneRecognitionQuestion>(
+  attemptId: string, questionNumber: number, answer: string, signal?: AbortSignal,
+): Promise<QuizAnswerResult<Question>> {
+  return request(`/quizzes/${attemptId}/answer`, {
+    method: 'POST',
+    body: JSON.stringify({ question_number: questionNumber, answer }),
+    signal,
+  });
+}
+
+export async function advanceQuizAttempt<Question = ToneRecognitionQuestion>(
+  attemptId: string, questionNumber: number, signal?: AbortSignal,
+): Promise<QuizAttempt<Question>> {
+  return request(`/quizzes/${attemptId}/next`, {
+    method: 'POST',
+    body: JSON.stringify({ question_number: questionNumber }),
+    signal,
+  });
+}
+
+export async function completeQuizAttempt<Question = ToneRecognitionQuestion>(
+  attemptId: string, questionNumber: number, signal?: AbortSignal,
+): Promise<QuizAttempt<Question>> {
+  return request(`/quizzes/${attemptId}/complete`, {
+    method: 'POST',
+    body: JSON.stringify({ question_number: questionNumber }),
+    signal,
+  });
+}
+
 // ─── Auth (called by login/signup pages) ──────────────────────────────────────
 // POST /users/login    → { Message, Token, User: { user_id, username } }
 // POST /users/signup   → { Message, Token, User: { user_id, username } }

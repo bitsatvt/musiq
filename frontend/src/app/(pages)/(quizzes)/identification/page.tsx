@@ -2,7 +2,10 @@
 
 import React, { useEffect, useRef, useState } from "react"
 import Link from "next/link"
-import { getProfile, type Instrument } from "@/lib/api"
+import {
+  advanceQuizAttempt, completeQuizAttempt, getProfile, startQuizAttempt,
+  submitQuizAnswer, type Instrument, type QuizAttempt,
+} from "@/lib/api"
 import { getAuthToken } from "@/lib/auth"
 import * as Tone from "tone"
 import { Play, ChevronDown, Loader2 } from "lucide-react"
@@ -95,6 +98,8 @@ export default function ToneRecognitionQuiz() {
   const [starting, setStarting] = useState(false)
   const [startError, setStartError] = useState("")
   const startRequest = useRef<AbortController | null>(null)
+  const quizRequest = useRef<AbortController | null>(null)
+  const quizActions = useRef(Promise.resolve())
   const playbackTimer = useRef<ReturnType<typeof setTimeout> | null>(null)
   const availableInstruments = profile.instruments.filter((item) =>
     Object.prototype.hasOwnProperty.call(INSTRUMENT_SAMPLES, item.name))
@@ -106,7 +111,8 @@ export default function ToneRecognitionQuiz() {
   const [currentQuestion, setCurrentQuestion] = useState(1)
   const [totalCorrect, setTotalCorrect] = useState(0)
   const [finished, setFinished] = useState(false)
-  const [wrong, setWrong] = useState(false)
+  const [attemptId, setAttemptId] = useState("")
+  const [totalQuestions, setTotalQuestions] = useState(10)
 
   // Question states
   const [currentNote, setCurrentNote] = useState("")
@@ -114,8 +120,6 @@ export default function ToneRecognitionQuiz() {
   const [feedback, setFeedback] = useState("")
   const [answeredCorrectly, setAnsweredCorrectly] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
-
-  const notes = ["C4", "D4", "E4", "F4", "G4", "A4", "B4"]
 
   // Fetch current selections for each new attempt rather than trusting cached account data.
   useEffect(() => {
@@ -155,10 +159,12 @@ export default function ToneRecognitionQuiz() {
 
   useEffect(() => () => {
     startRequest.current?.abort()
+    quizRequest.current?.abort()
     if (playbackTimer.current) clearTimeout(playbackTimer.current)
   }, [])
 
   const reloadInstruments = () => {
+    quizRequest.current?.abort()
     setSelectedInstrument(null)
     setAudio(null)
     setStartError("")
@@ -166,19 +172,16 @@ export default function ToneRecognitionQuiz() {
     setProfileAttempt((attempt) => attempt + 1)
   }
 
-  const generateQuiz = () => {
-    const correct = notes[Math.floor(Math.random() * notes.length)]
-    const incorrect = notes
-      .filter((n) => n !== correct)
-      .sort(() => 0.5 - Math.random())
-      .slice(0, 3)
-
-    const allChoices = [...incorrect, correct].sort(() => 0.5 - Math.random())
-
-    setCurrentNote(correct)
-    setChoices(allChoices)
-    setFeedback("")
-    setAnsweredCorrectly(false)
+  // Display the question, progress, and score returned by the backend.
+  const applyQuizState = (attempt: QuizAttempt) => {
+    setAttemptId(attempt.attempt_id)
+    setCurrentQuestion(attempt.question_number)
+    setTotalQuestions(attempt.total_questions)
+    setTotalCorrect(attempt.first_try_correct)
+    setCurrentNote(attempt.question.note)
+    setChoices(attempt.question.choices)
+    setAnsweredCorrectly(attempt.answered_correctly)
+    setFinished(attempt.completed)
   }
 
   const playNote = async () => {
@@ -195,26 +198,30 @@ export default function ToneRecognitionQuiz() {
     }
   }
 
-  const checkAnswer = (choice: string) => {
-    if (choice === currentNote) {
-      setFeedback("Correct!")
-      setAnsweredCorrectly(true)
-      if (!wrong) setTotalCorrect((prev) => prev + 1)
-      setWrong(false)
-    } else {
-      setFeedback("Try again")
-      setWrong(true)
-    }
+  // Keep rapid clicks in order and discard responses after leaving this attempt.
+  const queueQuizAction = (action: "answer" | "next" | "complete", answer = "") => {
+    const signal = quizRequest.current?.signal
+    if (!signal) return
+    const token = getAuthToken()
+    quizActions.current = quizActions.current.then(async () => {
+      if (signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Please reload the quiz.")
+      const attempt = await (action === "answer"
+        ? submitQuizAnswer(attemptId, currentQuestion, answer, signal)
+        : action === "next"
+          ? advanceQuizAttempt(attemptId, currentQuestion, signal)
+          : completeQuizAttempt(attemptId, currentQuestion, signal))
+      if (signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Please reload the quiz.")
+      applyQuizState(attempt)
+      setFeedback("is_correct" in attempt ? (attempt.is_correct ? "Correct!" : "Try again") : "")
+    }).catch((error) => {
+      if (!signal.aborted) setFeedback(error instanceof Error ? error.message : "Unable to update the quiz. Please try again.")
+    })
   }
 
-  const nextQuestion = () => {
-    if (currentQuestion === 10) {
-      setFinished(true)
-      return
-    }
-    setCurrentQuestion((prev) => prev + 1)
-    generateQuiz()
-  }
+  const checkAnswer = (choice: string) => queueQuizAction("answer", choice)
+  const nextQuestion = () => queueQuizAction(currentQuestion === totalQuestions ? "complete" : "next")
 
   const startQuiz = async () => {
     if (!canStart || !selectedInstrument || startRequest.current) return
@@ -234,13 +241,14 @@ export default function ToneRecognitionQuiz() {
         setSelectedInstrument(null)
         throw new Error("Your profile instruments changed. Choose an instrument from the updated list.")
       }
+      const attempt = await startQuizAttempt("tone_recognition", selectedInstrument.instrument_id, controller.signal)
+      if (controller.signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Reload your instruments before starting.")
       // The selected instrument stays fixed until this attempt is finished.
+      quizRequest.current = new AbortController()
+      applyQuizState(attempt)
       setStarted(true)
-      setCurrentQuestion(1)
-      setTotalCorrect(0)
-      setWrong(false)
-      setFinished(false)
-      generateQuiz()
+      setFeedback("")
     } catch (error) {
       if (!controller.signal.aborted) setStartError(error instanceof Error ? error.message : "Unable to start the quiz. Please try again.")
     } finally {
@@ -344,7 +352,7 @@ export default function ToneRecognitionQuiz() {
               Quiz Complete!
             </CardTitle>
             <CardDescription className="text-2xl mt-6 text-gray-600 font-inter">
-              Score: <span className="text-[#6D52A3] font-bold">{totalCorrect}/10</span>
+              Score: <span className="text-[#6D52A3] font-bold">{totalCorrect}/{totalQuestions}</span>
             </CardDescription>
           </CardHeader>
           <CardFooter className="mt-10 flex justify-center">
@@ -371,13 +379,13 @@ export default function ToneRecognitionQuiz() {
             Tone Recognition Quiz
           </CardTitle>
           <p className="text-sm font-bold text-gray-500 font-inter tracking-[0.2em]">
-            Question {currentQuestion} of 10 ({instrument})
+            Question {currentQuestion} of {totalQuestions} ({instrument})
           </p>
           
           <div className="w-full max-w-md mx-auto h-1.5 bg-gray-100 rounded-full mt-4 overflow-hidden">
             <div 
               className="h-full bg-[#6D52A3] transition-all duration-500" 
-              style={{ width: `${(currentQuestion / 10) * 100}%` }}
+              style={{ width: `${(currentQuestion / totalQuestions) * 100}%` }}
             />
           </div>
 
