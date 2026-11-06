@@ -1,5 +1,4 @@
 import random
-from functools import cmp_to_key
 
 
 TOTAL_QUESTIONS = 10
@@ -7,14 +6,15 @@ SUPPORTED_INSTRUMENTS = {"Piano", "Violin", "Guitar", "Trumpet"}
 NOTES = ["C4", "D4", "E4", "F4", "G4", "A4", "B4"]
 
 
-# Keep the existing random-sort approach when building the four choices.
+# Choose three incorrect notes and shuffle them with the correct note.
 def generate_question():
     correct = random.choice(NOTES)
-    random_order = cmp_to_key(lambda a, b: -1 if random.random() > 0.5 else 1)
-    incorrect = sorted((note for note in NOTES if note != correct), key=random_order)[:3]
+    incorrect = random.sample([note for note in NOTES if note != correct], 3)
+    choices = incorrect + [correct]
+    random.shuffle(choices)
     return {
         "note": correct,
-        "choices": sorted(incorrect + [correct], key=random_order),
+        "choices": choices,
     }
 
 

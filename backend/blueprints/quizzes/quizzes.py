@@ -1,4 +1,5 @@
 from threading import Lock
+from time import monotonic
 from uuid import uuid4
 
 from flask import Blueprint, current_app, jsonify, request
@@ -12,6 +13,7 @@ from . import tone_recognition
 
 quizzes = Blueprint("quizzes", __name__)
 QUIZ_TYPES = {"tone_recognition": tone_recognition}
+ATTEMPT_TTL_SECONDS = 60 * 60
 # Temporary, single-process storage until quiz_attempts is added to the database.
 active_attempts = {}
 attempt_lock = Lock()
@@ -36,11 +38,21 @@ def question_number(data):
     return number
 
 
+# Called while holding attempt_lock; cleanup runs when quiz requests come in.
+def remove_expired_attempts(now):
+    for attempt_id, attempt in list(active_attempts.items()):
+        if now - attempt["last_activity"] >= ATTEMPT_TTL_SECONDS:
+            del active_attempts[attempt_id]
+
+
 # Called while holding attempt_lock so ownership checks and updates stay together.
 def get_attempt(attempt_id):
+    now = monotonic()
+    remove_expired_attempts(now)
     attempt = active_attempts.get(attempt_id)
     if attempt is None or attempt["user_id"] != get_jwt_identity():
         raise NotFound("Quiz attempt not found. Please start the quiz again.")
+    attempt["last_activity"] = now
     return attempt
 
 # Check that the request is for the current question number, raising Conflict if not.
@@ -100,15 +112,19 @@ def start_quiz():
         "total_questions": module.TOTAL_QUESTIONS,
         "question": module.generate_question(),
         "first_try_correct": 0,
+        "guess_count": 0,
         "wrong": False,
         "answered_correctly": False,
         "completed": False,
     }
     with attempt_lock:
+        now = monotonic()
+        remove_expired_attempts(now)
         for old_id in list(active_attempts):
             old = active_attempts[old_id]
             if old["user_id"] == user_id and old["completed"]:
                 del active_attempts[old_id]
+        attempt["last_activity"] = now
         active_attempts[attempt_id] = attempt
     return attempt_response(attempt_id, attempt), 201
 
@@ -130,6 +146,8 @@ def answer_question(attempt_id):
         except ValueError as error:
             raise BadRequest(str(error)) from error
         if not attempt["answered_correctly"]:
+            # Count valid guesses for this question, including the correct answer.
+            attempt["guess_count"] += 1
             if is_correct:
                 if not attempt["wrong"]:
                     attempt["first_try_correct"] += 1
@@ -159,6 +177,7 @@ def next_question(attempt_id):
         module = QUIZ_TYPES[attempt["quiz_type"]]
         attempt["question_number"] += 1
         attempt["question"] = module.generate_question()
+        attempt["guess_count"] = 0
         attempt["wrong"] = False
         attempt["answered_correctly"] = False
         return attempt_response(attempt_id, attempt)
