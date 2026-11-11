@@ -1,0 +1,13 @@
+{
+    "presets": {
+      "balanced":    {"ceiling": 1000, "floor": 100,
+  "gracePeriodSec": 1.5, "timeExponent": 2,   "mistakeExponent": 2,
+  "accuracyWeight": 0.5},
+      "forgiving":   {"ceiling": 1000, "floor": 100,
+  "gracePeriodSec": 2,   "timeExponent": 3,   "mistakeExponent": 1.5,
+  "accuracyWeight": 0.6},
+      "competitive": {"ceiling": 1000, "floor": 100,
+  "gracePeriodSec": 1,   "timeExponent": 1.5, "mistakeExponent": 3,
+  "accuracyWeight": 0.35}
+    }
+  }
