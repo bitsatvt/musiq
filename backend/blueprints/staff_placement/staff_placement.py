@@ -2,11 +2,15 @@ from random import choice, shuffle
 from uuid import uuid4
 
 from flask import Blueprint, jsonify, request
+from flask_jwt_extended import get_jwt_identity, jwt_required
+from blueprints.users.user_db import get_user_by_id
 
 
 staff_placement = Blueprint("staff_placement", __name__)
 
 QUIZ_LENGTH = 10
+TOTAL_QUESTIONS = QUIZ_LENGTH
+SUPPORTED_INSTRUMENTS = {"Piano", "Violin", "Guitar", "Trumpet"}
 
 INSTRUMENTS = {
     "Piano": {
@@ -42,6 +46,30 @@ INSTRUMENTS = {
 # A quiz is intentionally short-lived for now. Persistent history can be added
 # later without moving question generation or validation back into the client.
 QUIZ_SESSIONS = {}
+
+
+def _serialize_instrument(name, instrument):
+    return {
+        "name": name,
+        "staff_type": instrument["staff_type"],
+        "clefs": instrument["clefs"],
+        "range": instrument["range"],
+        "notation_note": instrument["notation_note"],
+        "layouts": [
+            {"clef": clef, "label": label}
+            for clef, label in instrument["layouts"]
+        ],
+    }
+
+
+@staff_placement.get("/instruments")
+def list_staff_placement_instruments():
+    return jsonify({
+        "Instruments": [
+            _serialize_instrument(name, instrument)
+            for name, instrument in INSTRUMENTS.items()
+        ]
+    }), 200
 
 
 def _staff_positions(clef, label):
@@ -85,13 +113,41 @@ def _question(position, question_number):
     }
 
 
+def generate_question(instrument_name):
+    """Generate one standardized quiz question for the selected instrument."""
+    instrument = INSTRUMENTS.get(instrument_name)
+    if instrument is None:
+        raise ValueError("Choose a supported instrument")
+    positions = [
+        position
+        for clef, label in instrument["layouts"]
+        for position in _staff_positions(clef, label)
+    ]
+    target = choice(positions)
+    choices = [position["id"] for position in positions]
+    shuffle(choices)
+    question = _question(target, 0)
+    question["choices"] = choices
+    return question
+
+
+def check_answer(question, answer):
+    if not isinstance(answer, str) or answer not in question["choices"]:
+        raise ValueError("Choose one of the available staff positions")
+    return answer == question["position_id"]
+
+
 @staff_placement.post("/start")
+@jwt_required()
 def start_quiz():
     data = request.get_json(silent=True) or {}
     instrument_name = data.get("instrument_name")
     instrument = INSTRUMENTS.get(instrument_name)
     if instrument is None:
         return jsonify({"Error": "Choose a supported instrument."}), 400
+    user = get_user_by_id(get_jwt_identity())
+    if user is None or not any(item["name"] == instrument_name for item in user["instruments"]):
+        return jsonify({"Error": "Choose an instrument from your profile."}), 403
 
     positions = [
         position
@@ -114,13 +170,7 @@ def start_quiz():
 
     return jsonify({
         "quiz_id": quiz_id,
-        "instrument": {
-            "name": instrument_name,
-            "staff_type": instrument["staff_type"],
-            "clefs": instrument["clefs"],
-            "range": instrument["range"],
-            "notation_note": instrument["notation_note"],
-        },
+        "instrument": _serialize_instrument(instrument_name, instrument),
         "questions": questions,
         "positions": positions,
     }), 201

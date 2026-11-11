@@ -15,6 +15,16 @@ export type StaffPlacementQuestion = {
   staff: 'treble' | 'bass';
   position_id: string;
   hint: string;
+  choices: string[];
+};
+
+export type StaffPlacementInstrumentConfig = {
+  name: string;
+  staffType: 'single' | 'grand';
+  clefs: string;
+  range: string;
+  notationNote: string;
+  layouts: { clef: 'treble' | 'bass'; label: string }[];
 };
 
 export type StaffPlacementPosition = {
@@ -28,16 +38,32 @@ export type StaffPlacementPosition = {
 
 export type StaffPlacementSession = {
   quiz_id: string;
-  instrument: {
+  instrument: StaffPlacementInstrumentConfig;
+  questions: StaffPlacementQuestion[];
+  positions: StaffPlacementPosition[];
+};
+
+export async function getStaffPlacementInstruments(signal?: AbortSignal): Promise<StaffPlacementInstrumentConfig[]> {
+  const response = await fetch(`${BASE_URL}/staff-placement/instruments`, { signal });
+  if (!response.ok) throw new Error('Unable to load staff placement instruments.');
+  const data = await response.json();
+  if (!Array.isArray(data.Instruments)) throw new Error('Unable to load staff placement instruments.');
+  return data.Instruments.map((item: {
     name: string;
     staff_type: 'single' | 'grand';
     clefs: string;
     range: string;
     notation_note: string;
-  };
-  questions: StaffPlacementQuestion[];
-  positions: StaffPlacementPosition[];
-};
+    layouts: { clef: 'treble' | 'bass'; label: string }[];
+  }) => ({
+    name: item.name,
+    staffType: item.staff_type,
+    clefs: item.clefs,
+    range: item.range,
+    notationNote: item.notation_note,
+    layouts: item.layouts,
+  }));
+}
 
 export type StaffPlacementValidation = {
   correct: boolean;
@@ -66,7 +92,7 @@ export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]
 export async function startStaffPlacementQuiz(instrumentName: string): Promise<StaffPlacementSession> {
   const response = await fetch(`${BASE_URL}/staff-placement/start`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: authHeaders(),
     body: JSON.stringify({ instrument_name: instrumentName }),
   });
   const data = await response.json();

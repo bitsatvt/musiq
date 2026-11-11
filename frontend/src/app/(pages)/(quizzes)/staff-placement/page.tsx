@@ -1,8 +1,10 @@
 "use client"
 
-import { useState } from "react"
+import Link from "next/link"
+import { useEffect, useRef, useState } from "react"
 import { Check, ChevronDown, FileMusic, MousePointerClick, RotateCcw } from "lucide-react"
-import { startStaffPlacementQuiz, validateStaffPlacement, type StaffPlacementPosition, type StaffPlacementQuestion } from "@/lib/api"
+import { advanceQuizAttempt, completeQuizAttempt, getProfile, getStaffPlacementInstruments, startQuizAttempt, submitQuizAnswer, type Instrument, type QuizAttempt, type StaffPlacementInstrumentConfig, type StaffPlacementQuestion } from "@/lib/api"
+import { getAuthToken } from "@/lib/auth"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -21,16 +23,7 @@ import {
 } from "@/components/ui/dropdown-menu"
 import { NavigationHeader } from "@/components/shared/NavigationHeader"
 
-type StaffType = "single" | "grand"
-
-type InstrumentConfig = {
-  id: "piano" | "violin" | "guitar" | "trumpet"
-  name: string
-  staffType: StaffType
-  clefs: string
-  range: string
-  notationNote: string
-}
+type InstrumentConfig = StaffPlacementInstrumentConfig
 
 type StaffPosition = {
   id: string
@@ -50,41 +43,6 @@ type StaffLayout = {
   clef: "treble" | "bass"
   top: number
 }
-
-const instrumentConfigs: InstrumentConfig[] = [
-  {
-    id: "piano",
-    name: "Piano",
-    staffType: "grand",
-    clefs: "Treble and bass clefs",
-    range: "A0–C8",
-    notationNote: "Grand staff for the standard 88-key piano range.",
-  },
-  {
-    id: "violin",
-    name: "Violin",
-    staffType: "single",
-    clefs: "Treble clef",
-    range: "G3–A7",
-    notationNote: "Standard orchestral written range.",
-  },
-  {
-    id: "guitar",
-    name: "Guitar",
-    staffType: "single",
-    clefs: "Treble clef",
-    range: "E3–E6",
-    notationNote: "Written notation; guitar sounds one octave lower.",
-  },
-  {
-    id: "trumpet",
-    name: "Trumpet",
-    staffType: "single",
-    clefs: "Treble clef",
-    range: "F♯3–C6",
-    notationNote: "Written range for a B♭ trumpet.",
-  },
-]
 
 function StaffLines({ y }: { y: number }) {
   return (
@@ -120,12 +78,12 @@ function getPositionLabel(index: number): string {
 }
 
 function getStaffLayouts(instrument: InstrumentConfig): StaffLayout[] {
-  return instrument.staffType === "grand"
-    ? [
-        { id: "treble", label: "Treble staff", clef: "treble", top: 58 },
-        { id: "bass", label: "Bass staff", clef: "bass", top: 158 },
-      ]
-    : [{ id: "treble", label: "Treble staff", clef: "treble", top: 64 }]
+  return instrument.layouts.map((layout) => ({
+    id: layout.clef,
+    label: layout.label,
+    clef: layout.clef,
+    top: layout.clef === "bass" ? 158 : instrument.staffType === "grand" ? 58 : 64,
+  }))
 }
 
 function getStaffPositions(instrument: InstrumentConfig): StaffPosition[] {
@@ -197,7 +155,7 @@ function PlacementStaff({
               aria-label={`Place the note on ${position.label}`}
               aria-pressed={isSelected}
               aria-disabled={disabled}
-              className={disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"}
+              className={disabled ? "cursor-not-allowed opacity-50 focus:outline-none" : "cursor-pointer focus:outline-none focus-visible:outline-none"}
               onMouseEnter={() => !disabled && onHover(position)}
               onMouseLeave={() => onHover(null)}
               onFocus={() => !disabled && onHover(position)}
@@ -223,19 +181,25 @@ function PlacementStaff({
                 strokeDasharray={isSelected ? undefined : "4 4"}
               />
               {isSelected ? (
-                <text
-                  x={position.indicatorX}
-                  y={position.y}
-                  textAnchor="middle"
-                  dominantBaseline="central"
-                  fill="#6D52A3"
-                  fontFamily="serif"
-                  fontSize="25"
-                  fontWeight="700"
-                  aria-hidden="true"
-                >
-                  ♪
-                </text>
+                <g aria-hidden="true">
+                  <line
+                    x1={position.indicatorX + 5}
+                    x2={position.indicatorX + 5}
+                    y1={position.y - 2}
+                    y2={position.y - 30}
+                    stroke="#6D52A3"
+                    strokeWidth="2.5"
+                    strokeLinecap="round"
+                  />
+                  <ellipse
+                    cx={position.indicatorX}
+                    cy={position.y}
+                    rx="8"
+                    ry="5"
+                    transform={`rotate(-20 ${position.indicatorX} ${position.y})`}
+                    fill="#6D52A3"
+                  />
+                </g>
               ) : (
                 <circle
                   cx={position.indicatorX}
@@ -298,13 +262,19 @@ function QuizWrapper({ children }: { children: React.ReactNode }) {
 }
 
 export default function StaffPlacementQuiz() {
-  const [instrumentId, setInstrumentId] = useState<InstrumentConfig["id"]>("piano")
+  const [selectedInstrument, setSelectedInstrument] = useState<Instrument | null>(null)
+  const [profile, setProfile] = useState<{
+    status: "loading" | "ready" | "error"
+    instruments: Instrument[]
+    error: string
+  }>({ status: "loading", instruments: [], error: "" })
+  const [profileAttempt, setProfileAttempt] = useState(0)
+  const [instrumentConfigs, setInstrumentConfigs] = useState<InstrumentConfig[]>([])
+  const [starting, setStarting] = useState(false)
+  const startRequest = useRef<AbortController | null>(null)
   const [quizStarted, setQuizStarted] = useState(false)
   const [quizFinished, setQuizFinished] = useState(false)
-  const [questionIndex, setQuestionIndex] = useState(0)
-  const [quizId, setQuizId] = useState<string | null>(null)
-  const [sessionQuestionBank, setSessionQuestionBank] = useState<StaffPlacementQuestion[]>([])
-  const [sessionPositions, setSessionPositions] = useState<StaffPlacementPosition[]>([])
+  const [attempt, setAttempt] = useState<QuizAttempt<StaffPlacementQuestion> | null>(null)
   const [score, setScore] = useState(0)
   const [selectedPosition, setSelectedPosition] = useState<string | null>(null)
   const [hoveredPosition, setHoveredPosition] = useState<StaffPosition | null>(null)
@@ -313,15 +283,14 @@ export default function StaffPlacementQuiz() {
   const [hintVisible, setHintVisible] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [errorMessage, setErrorMessage] = useState<string | null>(null)
-  const instrument = instrumentConfigs.find((item) => item.id === instrumentId) ?? instrumentConfigs[0]
-  const displayPositions = getStaffPositions(instrument)
-  const staffPositions = sessionPositions.length === 0
-    ? displayPositions
-    : displayPositions.map((position) => {
-        const backendPosition = sessionPositions.find((item) => item.id === position.id)
-        return backendPosition ? { ...position, kind: backendPosition.kind, noteName: backendPosition.note, noteLetter: backendPosition.note[0] as NoteLetter, label: backendPosition.label } : position
-      })
-  const targetNote = sessionQuestionBank[questionIndex] ?? {
+  const availableInstruments = profile.instruments.filter((item) =>
+    instrumentConfigs.some((config) => config.name === item.name))
+  const instrument = instrumentConfigs.find((item) => item.name === selectedInstrument?.name) ?? instrumentConfigs[0]
+  const canStart = profile.status === "ready" && !starting &&
+    availableInstruments.some((item) => item.instrument_id === selectedInstrument?.instrument_id)
+  const displayPositions = instrument ? getStaffPositions(instrument) : []
+  const staffPositions = displayPositions
+  const targetNote = attempt?.question ?? {
     id: "",
     display_name: "",
     letter: "A",
@@ -329,8 +298,35 @@ export default function StaffPlacementQuiz() {
     staff: "treble" as const,
     position_id: "",
     hint: "",
+    choices: [],
   }
   const selectedPositionData = staffPositions.find((position) => position.id === selectedPosition)
+
+  useEffect(() => {
+    const controller = new AbortController()
+    const token = getAuthToken()
+    Promise.all([getProfile(controller.signal), getStaffPlacementInstruments(controller.signal)])
+      .then(([user, configs]) => {
+        if (controller.signal.aborted) return
+        if (getAuthToken() !== token) throw new Error("Your account changed. Please reload your instruments.")
+        setInstrumentConfigs(configs)
+        setProfile({ status: "ready", instruments: user.instruments, error: "" })
+      })
+      .catch(() => {
+        if (!controller.signal.aborted) {
+          setProfile({ status: "error", instruments: [], error: "Unable to load your instruments. Check that you’re logged in, then try again." })
+        }
+      })
+    return () => controller.abort()
+  }, [profileAttempt])
+
+  useEffect(() => () => startRequest.current?.abort(), [])
+
+  function reloadInstruments() {
+    setSelectedInstrument(null)
+    setProfile({ status: "loading", instruments: [], error: "" })
+    setProfileAttempt((attempt) => attempt + 1)
+  }
 
   function resetPlacement() {
     setSelectedPosition(null)
@@ -341,57 +337,78 @@ export default function StaffPlacementQuiz() {
   }
 
   async function submitPlacement() {
-    if (!selectedPositionData || !quizId || !targetNote.id || isLoading) return
+    if (!selectedPositionData || !attempt || isLoading) return
     setIsLoading(true)
     setErrorMessage(null)
     try {
-      const result = await validateStaffPlacement(quizId, targetNote.id, selectedPositionData.id)
-      setSubmissionResult(result.correct ? "correct" : "incorrect")
-      setSelectedNote(result.selected_note)
-      if (result.correct) setScore((currentScore) => currentScore + 1)
+      const result = await submitQuizAnswer<StaffPlacementQuestion>(attempt.attempt_id, attempt.question_number, selectedPositionData.id)
+      setAttempt(result)
+      setSubmissionResult(result.is_correct ? "correct" : "incorrect")
+      setSelectedNote(selectedPositionData.noteName)
+      setScore(result.first_try_correct)
     } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to validate the placement.")
+      setErrorMessage(error instanceof Error ? error.message : "Unable to update the quiz.")
     } finally {
       setIsLoading(false)
     }
   }
 
-  function moveToNextQuestion() {
-    if (questionIndex >= sessionQuestionBank.length - 1) {
-      setQuizFinished(true)
-    } else {
-      setQuestionIndex((currentIndex) => currentIndex + 1)
-    }
-    resetPlacement()
-  }
-
-  async function startQuiz() {
+  async function moveToNextQuestion() {
+    if (!attempt || !attempt.answered_correctly || isLoading) return
     setIsLoading(true)
     setErrorMessage(null)
     try {
-      const session = await startStaffPlacementQuiz(instrument.name)
-      setQuizId(session.quiz_id)
-      setSessionQuestionBank(session.questions)
-      setSessionPositions(session.positions)
+      const result = attempt.question_number === attempt.total_questions
+        ? await completeQuizAttempt<StaffPlacementQuestion>(attempt.attempt_id, attempt.question_number)
+        : await advanceQuizAttempt<StaffPlacementQuestion>(attempt.attempt_id, attempt.question_number)
+      setAttempt(result)
+      setScore(result.first_try_correct)
+      setQuizFinished(result.completed)
+      setSubmissionResult(null)
+      resetPlacement()
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to advance the quiz.")
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  async function startQuiz() {
+    if (!canStart || !selectedInstrument || startRequest.current) return
+    const controller = new AbortController()
+    startRequest.current = controller
+    const token = getAuthToken()
+    setStarting(true)
+    setIsLoading(true)
+    setErrorMessage(null)
+    try {
+      const user = await getProfile(controller.signal)
+      if (controller.signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Reload your instruments before starting.")
+      setProfile({ status: "ready", instruments: user.instruments, error: "" })
+      if (!user.instruments.some((item) => item.instrument_id === selectedInstrument.instrument_id && item.name === selectedInstrument.name)) {
+        setSelectedInstrument(null)
+        throw new Error("Your profile instruments changed. Choose an instrument from the updated list.")
+      }
+      const session = await startQuizAttempt<StaffPlacementQuestion>("staff_placement", selectedInstrument.instrument_id, controller.signal)
+      setAttempt(session)
       setQuizStarted(true)
       setQuizFinished(false)
-      setQuestionIndex(0)
-      setScore(0)
+      setScore(session.first_try_correct)
       resetPlacement()
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to start the quiz.")
     } finally {
+      startRequest.current = null
+      if (!controller.signal.aborted) setStarting(false)
       setIsLoading(false)
     }
   }
 
   function restartQuiz() {
-    setSessionQuestionBank([])
-    setSessionPositions([])
-    setQuizId(null)
+    setAttempt(null)
     setQuizStarted(false)
     setQuizFinished(false)
-    setQuestionIndex(0)
     setScore(0)
     resetPlacement()
   }
@@ -416,43 +433,57 @@ export default function StaffPlacementQuiz() {
             <label className="text-xs font-bold uppercase tracking-widest text-gray-400" htmlFor="instrument-selector">
               Choose your instrument
             </label>
-            <DropdownMenu>
+            {profile.status === "loading" && <p role="status">Loading your instruments...</p>}
+            {profile.status === "error" && (
+              <div className="space-y-3">
+                <p role="alert" className="text-red-600">{profile.error}</p>
+                <Button variant="outline" onClick={reloadInstruments}>Retry</Button>
+                <Button variant="link" asChild><Link href="/login">Log in</Link></Button>
+              </div>
+            )}
+            {profile.status === "ready" && availableInstruments.length === 0 && (
+              <p role="status">{profile.instruments.length === 0
+                ? "Select instruments in your profile before starting this quiz."
+                : "None of your profile instruments are supported by this quiz yet. Choose Piano, Violin, Guitar, or Trumpet in your profile."}</p>
+            )}
+            {profile.status === "ready" && availableInstruments.length > 0 && <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button id="instrument-selector" variant="outline" className="w-56 justify-between rounded-xl border-2 py-6 font-bold">
-                  {instrument.name}
+                <Button id="instrument-selector" disabled={starting} variant="outline" className="w-56 justify-between rounded-xl border-2 py-6 font-bold">
+                  {selectedInstrument?.name ?? "Choose an instrument"}
                   <ChevronDown className="size-4 opacity-50" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent className="w-56 rounded-xl border-2 bg-white shadow-xl">
-                {instrumentConfigs.map((item) => (
+                {availableInstruments.map((item) => (
                   <DropdownMenuItem
-                    key={item.id}
+                    key={item.instrument_id}
                     onClick={() => {
-                      setInstrumentId(item.id)
-                      setQuizId(null)
-                      setSessionQuestionBank([])
-                      setSessionPositions([])
-                      setQuestionIndex(0)
+                      setSelectedInstrument(item)
+                      setAttempt(null)
+                      setQuizStarted(false)
+                      setQuizFinished(false)
+                      setScore(0)
                       resetPlacement()
                     }}
                     className="cursor-pointer py-3 font-medium hover:bg-stone-100"
                   >
                     <span>{item.name}</span>
-                    {instrumentId === item.id && <Check className="ml-auto size-4 text-[#6D52A3]" />}
+                    {selectedInstrument?.instrument_id === item.instrument_id && <Check className="ml-auto size-4 text-[#6D52A3]" />}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
-            </DropdownMenu>
-            <p className="mt-2 text-sm text-gray-500">{instrument.name} selected for this practice session.</p>
+            </DropdownMenu>}
+            {profile.status === "ready" && <Button variant="link" asChild><Link href="/profile">Edit instruments in profile</Link></Button>}
+            {selectedInstrument && <p className="mt-2 text-sm text-gray-500">{selectedInstrument.name} selected for this practice session.</p>}
           </CardContent>
 
           <CardFooter className="mt-6 justify-center pb-0">
             <Button
               onClick={startQuiz}
-              disabled={isLoading}
+              disabled={!canStart || isLoading}
               className="min-w-56 rounded-2xl bg-[#6D52A3] px-10 py-7 text-lg font-bold text-white"
             >
-              {isLoading ? "Loading questions..." : "Next"}
+              {starting ? "Checking profile..." : isLoading ? "Loading questions..." : "Next"}
             </Button>
           </CardFooter>
           {errorMessage && <p role="alert" className="mt-4 text-center text-sm text-red-600">{errorMessage}</p>}
@@ -467,12 +498,12 @@ export default function StaffPlacementQuiz() {
               Quiz complete
             </CardTitle>
             <CardDescription className="text-lg text-gray-500 md:text-xl">
-              {instrument.name} staff placement
+              {instrument!.name} staff placement
             </CardDescription>
           </CardHeader>
           <CardContent className="mt-6">
             <p className="text-3xl font-extrabold text-[#6D52A3]">
-              You scored {score} out of {sessionQuestionBank.length}
+              You scored {score} out of {attempt?.total_questions ?? 0}
             </p>
           </CardContent>
           <CardFooter className="mt-6 justify-center pb-0">
@@ -486,9 +517,12 @@ export default function StaffPlacementQuiz() {
         <CardHeader className="px-0 pt-0">
           <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
             <div>
-              <p className="mb-2 text-sm font-semibold text-[#6D52A3]">Instrument locked: {instrument.name}</p>
+              <p className="mb-2 text-sm font-semibold text-[#6D52A3]">Question {attempt?.question_number} of {attempt?.total_questions} · Instrument locked: {instrument!.name}</p>
+              <div className="mb-4 h-1.5 w-full max-w-md overflow-hidden rounded-full bg-gray-100">
+                <div className="h-full bg-[#6D52A3] transition-all" style={{ width: `${((attempt?.question_number ?? 1) / (attempt?.total_questions ?? 1)) * 100}%` }} />
+              </div>
               <CardTitle className="text-2xl text-[#1A1A1A]">Place the {targetNote.display_name} on the staff</CardTitle>
-              <CardDescription className="mt-1">{instrument.name} · {instrument.clefs} · Written range {instrument.range}</CardDescription>
+              <CardDescription className="mt-1">{instrument!.name} · {instrument!.clefs} · Written range {instrument!.range}</CardDescription>
             </div>
             <div className="flex items-center gap-3 rounded-2xl bg-[#6D52A3]/10 px-4 py-3 text-[#6D52A3]" aria-label={`Target note ${targetNote.display_name}`}>
               <span className="font-serif text-5xl leading-none">♩</span>
@@ -511,19 +545,19 @@ export default function StaffPlacementQuiz() {
             {hintVisible && <p className="text-sm font-semibold text-[#6D52A3]">Hint: {targetNote.hint}</p>}
           </div>
           <PlacementStaff
-            instrument={instrument}
+            instrument={instrument!}
             selectedPosition={selectedPosition}
             hoveredPosition={hoveredPosition?.id ?? null}
             positions={staffPositions}
             onHover={setHoveredPosition}
             onSelect={(position) => setSelectedPosition(position.id)}
-            disabled={submissionResult !== null}
+            disabled={attempt?.answered_correctly ?? false}
           />
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
             <p className={submissionResult === "correct" ? "text-sm font-semibold text-green-600" : submissionResult === "incorrect" ? "text-sm font-semibold text-red-600" : "text-sm text-gray-500"}>
-              {submissionResult === "correct" ? `Correct. This position represents ${targetNote.display_name}.` : submissionResult === "incorrect" ? `Incorrect. You selected ${selectedNote ?? "a different note"}; continue to the next question below.` : selectedPosition ? "Placement selected. You can change it before submitting." : instrument.notationNote}
+              {submissionResult === "correct" ? `Correct. This position represents ${targetNote.display_name}.` : submissionResult === "incorrect" ? `Incorrect. You selected ${selectedNote ?? "a different note"}; continue to the next question below.` : selectedPosition ? "Placement selected. You can change it before submitting." : instrument!.notationNote}
             </p>
-            {submissionResult === null && selectedPosition ? (
+            {!attempt?.answered_correctly && selectedPosition ? (
               <Button variant="outline" onClick={resetPlacement} className="gap-2 rounded-xl">
                 <RotateCcw className="size-4" /> Clear placement
               </Button>
@@ -532,11 +566,11 @@ export default function StaffPlacementQuiz() {
         </CardContent>
           <CardFooter className="justify-center px-0 pb-0 pt-6">
             <Button
-              disabled={(!selectedPosition && submissionResult === null) || isLoading}
-              onClick={submissionResult === null ? submitPlacement : moveToNextQuestion}
+              disabled={(!selectedPosition && !attempt?.answered_correctly) || isLoading}
+              onClick={attempt?.answered_correctly ? moveToNextQuestion : submitPlacement}
               className="min-w-56 rounded-2xl bg-[#6D52A3] px-10 py-7 text-lg font-bold text-white disabled:opacity-60"
             >
-              {isLoading ? "Checking..." : submissionResult ? "Next question" : "Submit placement"}
+              {isLoading ? "Checking..." : attempt?.answered_correctly ? "Next question" : "Submit placement"}
             </Button>
           </CardFooter>
           {errorMessage && <p role="alert" className="pt-4 text-center text-sm text-red-600">{errorMessage}</p>}
