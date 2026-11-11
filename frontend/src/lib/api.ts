@@ -7,6 +7,71 @@ export type Instrument = {
   name: string;
 };
 
+export type StaffPlacementQuestion = {
+  id: string;
+  display_name: string;
+  letter: string;
+  octave: number;
+  staff: 'treble' | 'bass';
+  position_id: string;
+  hint: string;
+  choices: string[];
+};
+
+export type StaffPlacementInstrumentConfig = {
+  name: string;
+  staffType: 'single' | 'grand';
+  clefs: string;
+  range: string;
+  notationNote: string;
+  layouts: { clef: 'treble' | 'bass'; label: string }[];
+};
+
+export type StaffPlacementPosition = {
+  id: string;
+  label: string;
+  kind: 'line' | 'space';
+  note: string;
+  clef: 'treble' | 'bass';
+  index: number;
+};
+
+export type StaffPlacementSession = {
+  quiz_id: string;
+  instrument: StaffPlacementInstrumentConfig;
+  questions: StaffPlacementQuestion[];
+  positions: StaffPlacementPosition[];
+};
+
+export async function getStaffPlacementInstruments(signal?: AbortSignal): Promise<StaffPlacementInstrumentConfig[]> {
+  const response = await fetch(`${BASE_URL}/staff-placement/instruments`, { signal });
+  if (!response.ok) throw new Error('Unable to load staff placement instruments.');
+  const data = await response.json();
+  if (!Array.isArray(data.Instruments)) throw new Error('Unable to load staff placement instruments.');
+  return data.Instruments.map((item: {
+    name: string;
+    staff_type: 'single' | 'grand';
+    clefs: string;
+    range: string;
+    notation_note: string;
+    layouts: { clef: 'treble' | 'bass'; label: string }[];
+  }) => ({
+    name: item.name,
+    staffType: item.staff_type,
+    clefs: item.clefs,
+    range: item.range,
+    notationNote: item.notation_note,
+    layouts: item.layouts,
+  }));
+}
+
+export type StaffPlacementValidation = {
+  correct: boolean;
+  selected_note: string;
+  correct_note: string;
+  feedback: string;
+};
+
 // Public endpoint: instrument choices are needed before an account exists.
 export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]> {
   const response = await fetch(`${BASE_URL}/instruments`, { signal });
@@ -22,6 +87,32 @@ export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]
     throw new Error('Unable to load instruments. Please try again.');
   }
   return data.Instruments;
+}
+
+export async function startStaffPlacementQuiz(instrumentName: string): Promise<StaffPlacementSession> {
+  const response = await fetch(`${BASE_URL}/staff-placement/start`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ instrument_name: instrumentName }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.Error || 'Unable to start the staff placement quiz.');
+  return data as StaffPlacementSession;
+}
+
+export async function validateStaffPlacement(
+  quizId: string,
+  questionId: string,
+  positionId: string,
+): Promise<StaffPlacementValidation> {
+  const response = await fetch(`${BASE_URL}/staff-placement/validate`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ quiz_id: quizId, question_id: questionId, position_id: positionId }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.Error || 'Unable to validate the placement.');
+  return data as StaffPlacementValidation;
 }
 
 function getToken() {

@@ -1,5 +1,6 @@
 from threading import Lock
 from time import monotonic
+from types import SimpleNamespace
 from uuid import uuid4
 
 from flask import Blueprint, current_app, jsonify, request
@@ -9,10 +10,25 @@ from werkzeug.exceptions import BadRequest, Conflict, HTTPException, NotFound
 
 from ..users.user_db import get_user_by_id
 from . import tone_recognition
+from ..staff_placement.staff_placement import (
+    TOTAL_QUESTIONS as STAFF_TOTAL_QUESTIONS,
+    SUPPORTED_INSTRUMENTS as STAFF_SUPPORTED_INSTRUMENTS,
+    check_answer as check_staff_answer,
+    generate_question as generate_staff_question,
+)
 
 
 quizzes = Blueprint("quizzes", __name__)
-QUIZ_TYPES = {"tone_recognition": tone_recognition}
+staff_placement_quiz = SimpleNamespace(
+    TOTAL_QUESTIONS=STAFF_TOTAL_QUESTIONS,
+    SUPPORTED_INSTRUMENTS=STAFF_SUPPORTED_INSTRUMENTS,
+    generate_question=generate_staff_question,
+    check_answer=check_staff_answer,
+)
+QUIZ_TYPES = {
+    "tone_recognition": tone_recognition,
+    "staff_placement": staff_placement_quiz,
+}
 ATTEMPT_TTL_SECONDS = 60 * 60
 # Temporary, single-process storage until quiz_attempts is added to the database.
 active_attempts = {}
@@ -108,9 +124,14 @@ def start_quiz():
         "user_id": user_id,
         "quiz_type": quiz_type,
         "instrument_id": instrument_id,
+        "instrument_name": next(item["name"] for item in user["instruments"]
+                                 if item["instrument_id"] == instrument_id),
         "question_number": 1,
         "total_questions": module.TOTAL_QUESTIONS,
-        "question": module.generate_question(),
+        "question": module.generate_question(
+            next(item["name"] for item in user["instruments"]
+                 if item["instrument_id"] == instrument_id)
+        ) if quiz_type == "staff_placement" else module.generate_question(),
         "first_try_correct": 0,
         "guess_count": 0,
         "wrong": False,
@@ -176,7 +197,9 @@ def next_question(attempt_id):
             raise Conflict("Complete the attempt after the final question")
         module = QUIZ_TYPES[attempt["quiz_type"]]
         attempt["question_number"] += 1
-        attempt["question"] = module.generate_question()
+        attempt["question"] = module.generate_question(
+            attempt["instrument_name"]
+        ) if attempt["quiz_type"] == "staff_placement" else module.generate_question()
         attempt["guess_count"] = 0
         attempt["wrong"] = False
         attempt["answered_correctly"] = False
