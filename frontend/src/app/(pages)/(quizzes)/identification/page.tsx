@@ -121,6 +121,13 @@ export default function ToneRecognitionQuiz() {
   const [answeredCorrectly, setAnsweredCorrectly] = useState(false)
   const [isPlaying, setIsPlaying] = useState(false)
 
+  // Scoring and timing state. The server owns the clock and the scores; the countdown is display only.
+  const [timeLimit, setTimeLimit] = useState(20)
+  const [deadline, setDeadline] = useState(0) // performance.now() value when the server's timer runs out
+  const [now, setNow] = useState(0)
+  const [timedOut, setTimedOut] = useState(false)
+  const [finalScore, setFinalScore] = useState<number | null>(null)
+
   // Fetch current selections for each new attempt rather than trusting cached account data.
   useEffect(() => {
     const controller = new AbortController()
@@ -182,15 +189,35 @@ export default function ToneRecognitionQuiz() {
     setChoices(attempt.question.choices)
     setAnsweredCorrectly(attempt.answered_correctly)
     setFinished(attempt.completed)
+    // Resync the countdown with the server on every response, so network delay only ever shortens it.
+    const received = performance.now()
+    setNow(received)
+    setDeadline(received + attempt.time_remaining_sec * 1000)
+    setTimeLimit(attempt.time_limit_sec)
+    setTimedOut(attempt.timed_out)
+    setFinalScore(attempt.final_score)
   }
 
-  const playNote = async () => {
-    if (!sampler.current || !isLoaded || !currentNote) return
+  // Tick the display countdown while the question is open.
+  useEffect(() => {
+    if (!started || finished || answeredCorrectly || timedOut) return
+    const id = setInterval(() => setNow(performance.now()), 100)
+    return () => clearInterval(id)
+  }, [started, finished, answeredCorrectly, timedOut, deadline])
+
+  const secondsLeft = Math.max(0, (deadline - now) / 1000)
+  // The server's clock started before ours, so when ours reaches 0 the server has already timed out.
+  const clientTimedOut = !answeredCorrectly && secondsLeft === 0
+  const questionLocked = answeredCorrectly || timedOut || clientTimedOut
+
+  const playNote = async (note = currentNote) => {
+    if (!sampler.current || !isLoaded || !note) return
 
     setIsPlaying(true)
     try {
       await Tone.start()
-      sampler.current?.triggerAttackRelease(currentNote, "2n")
+      sampler.current?.triggerAttackRelease(note, "2n")
+      if (playbackTimer.current) clearTimeout(playbackTimer.current)
       playbackTimer.current = setTimeout(() => setIsPlaying(false), 800)
     } catch {
       setIsPlaying(false)
@@ -214,13 +241,26 @@ export default function ToneRecognitionQuiz() {
       if (signal.aborted) return
       if (getAuthToken() !== token) throw new Error("Your account changed. Please reload the quiz.")
       applyQuizState(attempt)
-      setFeedback("is_correct" in attempt ? (attempt.is_correct ? "Correct!" : "Try again") : "")
+      if ("is_correct" in attempt) {
+        setFeedback(attempt.timed_out ? "Time's up"
+          : attempt.is_correct ? `Correct! +${Math.round(attempt.question_score ?? 0)}`
+          : "Try again")
+      } else {
+        setFeedback("")
+      }
+      // The server's timer is already running, so play each new question's note straight away.
+      if (action === "next" && attempt.question_number !== currentQuestion) playNote(attempt.question.note)
     }).catch((error) => {
       if (!signal.aborted) setFeedback(error instanceof Error ? error.message : "Unable to update the quiz. Please try again.")
     })
   }
 
   const checkAnswer = (choice: string) => queueQuizAction("answer", choice)
+  // Show the timeout as soon as our countdown ends (the server confirms it on Next), but keep real errors visible.
+  const timeUp = !answeredCorrectly && questionLocked
+  const shownFeedback = timeUp && ["", "Try again", "Time's up"].includes(feedback)
+    ? `Time's up! It was ${currentNote}`
+    : feedback
   const nextQuestion = () => queueQuizAction(currentQuestion === totalQuestions ? "complete" : "next")
 
   const startQuiz = async () => {
@@ -249,6 +289,7 @@ export default function ToneRecognitionQuiz() {
       applyQuizState(attempt)
       setStarted(true)
       setFeedback("")
+      playNote(attempt.question.note)
     } catch (error) {
       if (!controller.signal.aborted) setStartError(error instanceof Error ? error.message : "Unable to start the quiz. Please try again.")
     } finally {
@@ -351,8 +392,14 @@ export default function ToneRecognitionQuiz() {
             <CardTitle className="text-5xl font-extrabold text-[#1A1A1A] font-montserrat">
               Quiz Complete!
             </CardTitle>
-            <CardDescription className="text-2xl mt-6 text-gray-600 font-inter">
-              Score: <span className="text-[#6D52A3] font-bold">{totalCorrect}/{totalQuestions}</span>
+            <div className="mt-8 flex flex-col items-center">
+              <p aria-label="Final score" className="font-montserrat font-extrabold text-[#6D52A3] tabular-nums">
+                <span className="text-7xl">{finalScore === null ? "—" : `+${Math.round(finalScore)}`}</span>
+                <span className="text-3xl text-gray-400"> points</span>
+              </p>
+            </div>
+            <CardDescription className="text-lg mt-6 text-gray-600 font-inter">
+              First-try correct: <span className="font-bold">{totalCorrect}/{totalQuestions}</span>
             </CardDescription>
           </CardHeader>
           <CardFooter className="mt-10 flex justify-center">
@@ -389,6 +436,16 @@ export default function ToneRecognitionQuiz() {
             />
           </div>
 
+          <div className="w-full max-w-md mx-auto h-1.5 bg-gray-100 rounded-full mt-2 overflow-hidden">
+            <div
+              className={`h-full transition-[width] duration-100 ${secondsLeft <= 5 ? "bg-red-500" : "bg-[#6D52A3]/60"}`}
+              style={{ width: `${questionLocked ? 0 : (secondsLeft / timeLimit) * 100}%` }}
+            />
+          </div>
+          <p className="text-xs font-bold text-gray-500 font-inter mt-1 tabular-nums">
+            {questionLocked ? "\u00a0" : `${Math.ceil(secondsLeft)}s`}
+          </p>
+
           <CardDescription className="text-xl text-gray-800 mt-6 font-medium font-inter">
             Listen and guess the note.
           </CardDescription>
@@ -396,7 +453,7 @@ export default function ToneRecognitionQuiz() {
 
         <CardContent className="flex flex-col items-center gap-8 mt-8">
           <Button
-            onClick={playNote}
+            onClick={() => playNote()}
             disabled={isPlaying || !isLoaded}
             className={`bg-[#6D52A3] hover:bg-[#5A4389] text-white text-2xl px-14 py-10 rounded-2xl shadow-lg transition-all font-inter font-bold tracking-wide
               ${isPlaying ? "animate-pulse ring-purple-300 scale-105" : "active:scale-95"}
@@ -416,11 +473,11 @@ export default function ToneRecognitionQuiz() {
           </Button>
 
           <div className="h-8">
-            {feedback && (
-              <p className={`text-sm font-bold tracking-widest uppercase font-inter ${
-                feedback.includes("Correct!") ? "text-green-500" : "text-red-500"
+            {shownFeedback && (
+              <p role="status" className={`text-sm font-bold tracking-widest uppercase font-inter ${
+                shownFeedback.includes("Correct!") ? "text-green-500" : "text-red-500"
               }`}>
-                {feedback}
+                {shownFeedback}
               </p>
             )}
           </div>
@@ -432,11 +489,14 @@ export default function ToneRecognitionQuiz() {
               key={i}
               variant="outline"
               onClick={() => checkAnswer(note)}
-              disabled={answeredCorrectly}
+              disabled={questionLocked}
               className={`text-xl font-bold py-8 rounded-xl border-2 transition-all font-inter
-                ${answeredCorrectly && note === currentNote 
-                  ? 'border-[#6D52A3] bg-purple-50 text-[#6D52A3]' 
-                  : 'border-gray-200 text-gray-700 hover:bg-gray-100 hover:border-gray-300'}
+                ${answeredCorrectly && note === currentNote
+                  ? 'border-[#6D52A3] bg-purple-50 text-[#6D52A3]'
+                  : timeUp && note === currentNote
+                    // Reveal the correct answer after a timeout.
+                    ? 'border-red-500 bg-red-50 text-red-600 disabled:opacity-100'
+                    : 'border-gray-200 text-gray-700 hover:bg-gray-100 hover:border-gray-300'}
               `}
             >
               {note}
@@ -447,9 +507,9 @@ export default function ToneRecognitionQuiz() {
         <CardFooter className="flex justify-end items-center mt-12 px-4">
           <Button
             onClick={nextQuestion}
-            disabled={!answeredCorrectly}
+            disabled={!questionLocked}
             className={`text-lg font-bold px-8 py-6 rounded-xl transition-all font-inter
-              ${answeredCorrectly 
+              ${questionLocked 
                 ? "bg-white border-2 border-gray-200 text-gray-800 shadow-sm hover:bg-gray-50" 
                 : "bg-gray-100 text-gray-400 cursor-not-allowed opacity-50"}
             `}
