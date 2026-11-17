@@ -3,7 +3,7 @@
 import Link from "next/link"
 import { useEffect, useRef, useState } from "react"
 import { Check, ChevronDown, FileMusic, MousePointerClick, RotateCcw } from "lucide-react"
-import { advanceQuizAttempt, completeQuizAttempt, getProfile, getStaffPlacementInstruments, startQuizAttempt, submitQuizAnswer, type Instrument, type QuizAttempt, type StaffPlacementInstrumentConfig, type StaffPlacementQuestion } from "@/lib/api"
+import { advanceQuizAttempt, completeQuizAttempt, getProfile, getStaffPlacementInstruments, startQuizAttempt, submitQuizAnswer, type Instrument, type QuizAttempt, type StaffPlacementChoice, type StaffPlacementInstrumentConfig, type StaffPlacementQuestion } from "@/lib/api"
 import { getAuthToken } from "@/lib/auth"
 
 import { Button } from "@/components/ui/button"
@@ -29,13 +29,11 @@ type StaffPosition = {
   id: string
   label: string
   kind: "line" | "space"
-  noteLetter: NoteLetter
+  noteLetter: string
   noteName: string
   indicatorX: number
   y: number
 }
-
-type NoteLetter = "A" | "B" | "C" | "D" | "E" | "F" | "G"
 
 type StaffLayout = {
   id: string
@@ -54,27 +52,16 @@ function StaffLines({ y }: { y: number }) {
   )
 }
 
-function createStaffPositions(id: string, staffTop: number, label: string, clef: StaffLayout["clef"]): StaffPosition[] {
-  const noteNames = clef === "treble"
-    ? ["F5", "E5", "D5", "C5", "B4", "A4", "G4", "F4", "E4"]
-    : ["A3", "G3", "F3", "E3", "D3", "C3", "B2", "A2", "G2"]
-
-  return Array.from({ length: 9 }, (_, index) => ({
-    id: `${id}-${index}`,
-    kind: index % 2 === 0 ? "line" : "space",
-    noteLetter: noteNames[index][0] as NoteLetter,
-    noteName: noteNames[index],
-    label: `${label} ${getPositionLabel(index)}`,
-    indicatorX: 300 + index * 42,
-    y: staffTop - 16 + index * 8,
+function createStaffPositions(choices: StaffPlacementChoice[], staffTop: number, clef: StaffLayout["clef"]): StaffPosition[] {
+  return choices.filter((choice) => choice.clef === clef).map((choice) => ({
+    id: choice.id,
+    kind: choice.kind,
+    noteLetter: choice.note[0],
+    noteName: choice.note,
+    label: choice.label,
+    indicatorX: 300 + choice.index * 42,
+    y: staffTop - 16 + choice.index * 8,
   }))
-}
-
-function getPositionLabel(index: number): string {
-  const kind = index % 2 === 0 ? "line" : "space"
-  const number = kind === "line" ? index / 2 + 1 : Math.floor(index / 2) + 1
-
-  return `${kind} ${number}`
 }
 
 function getStaffLayouts(instrument: InstrumentConfig): StaffLayout[] {
@@ -86,9 +73,9 @@ function getStaffLayouts(instrument: InstrumentConfig): StaffLayout[] {
   }))
 }
 
-function getStaffPositions(instrument: InstrumentConfig): StaffPosition[] {
+function getStaffPositions(instrument: InstrumentConfig, choices: StaffPlacementChoice[]): StaffPosition[] {
   return getStaffLayouts(instrument).flatMap((staff) =>
-    createStaffPositions(staff.id, staff.top, staff.label, staff.clef),
+    createStaffPositions(choices, staff.top, staff.clef),
   )
 }
 
@@ -272,6 +259,8 @@ export default function StaffPlacementQuiz() {
   const [instrumentConfigs, setInstrumentConfigs] = useState<InstrumentConfig[]>([])
   const [starting, setStarting] = useState(false)
   const startRequest = useRef<AbortController | null>(null)
+  const quizRequest = useRef<AbortController | null>(null)
+  const quizActions = useRef(Promise.resolve())
   const [quizStarted, setQuizStarted] = useState(false)
   const [quizFinished, setQuizFinished] = useState(false)
   const [attempt, setAttempt] = useState<QuizAttempt<StaffPlacementQuestion> | null>(null)
@@ -288,7 +277,7 @@ export default function StaffPlacementQuiz() {
   const instrument = instrumentConfigs.find((item) => item.name === selectedInstrument?.name) ?? instrumentConfigs[0]
   const canStart = profile.status === "ready" && !starting &&
     availableInstruments.some((item) => item.instrument_id === selectedInstrument?.instrument_id)
-  const displayPositions = instrument ? getStaffPositions(instrument) : []
+  const displayPositions = instrument && attempt ? getStaffPositions(instrument, attempt.question.choices) : []
   const staffPositions = displayPositions
   const targetNote = attempt?.question ?? {
     id: "",
@@ -321,6 +310,7 @@ export default function StaffPlacementQuiz() {
   }, [profileAttempt])
 
   useEffect(() => () => startRequest.current?.abort(), [])
+  useEffect(() => () => quizRequest.current?.abort(), [])
 
   function reloadInstruments() {
     setSelectedInstrument(null)
@@ -336,41 +326,49 @@ export default function StaffPlacementQuiz() {
     setHintVisible(false)
   }
 
-  async function submitPlacement() {
-    if (!selectedPositionData || !attempt || isLoading) return
-    setIsLoading(true)
-    setErrorMessage(null)
-    try {
-      const result = await submitQuizAnswer<StaffPlacementQuestion>(attempt.attempt_id, attempt.question_number, selectedPositionData.id)
-      setAttempt(result)
-      setSubmissionResult(result.is_correct ? "correct" : "incorrect")
-      setSelectedNote(selectedPositionData.noteName)
-      setScore(result.first_try_correct)
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to update the quiz.")
-    } finally {
-      setIsLoading(false)
-    }
+  function applyQuizState(nextAttempt: QuizAttempt<StaffPlacementQuestion>) {
+    setAttempt(nextAttempt)
+    setScore(nextAttempt.first_try_correct)
+    setQuizFinished(nextAttempt.completed)
   }
 
-  async function moveToNextQuestion() {
-    if (!attempt || !attempt.answered_correctly || isLoading) return
-    setIsLoading(true)
-    setErrorMessage(null)
-    try {
-      const result = attempt.question_number === attempt.total_questions
-        ? await completeQuizAttempt<StaffPlacementQuestion>(attempt.attempt_id, attempt.question_number)
-        : await advanceQuizAttempt<StaffPlacementQuestion>(attempt.attempt_id, attempt.question_number)
-      setAttempt(result)
-      setScore(result.first_try_correct)
-      setQuizFinished(result.completed)
-      setSubmissionResult(null)
-      resetPlacement()
-    } catch (error) {
-      setErrorMessage(error instanceof Error ? error.message : "Unable to advance the quiz.")
-    } finally {
-      setIsLoading(false)
-    }
+  function queueQuizAction(action: "answer" | "next" | "complete", answer = "") {
+    if (!attempt) return
+    const signal = quizRequest.current?.signal
+    if (!signal) return
+    const token = getAuthToken()
+    const attemptId = attempt.attempt_id
+    const questionNumber = attempt.question_number
+    quizActions.current = quizActions.current.then(async () => {
+      if (signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Please reload the quiz.")
+      const nextAttempt = await (action === "answer"
+        ? submitQuizAnswer<StaffPlacementQuestion>(attemptId, questionNumber, answer, signal)
+        : action === "next"
+          ? advanceQuizAttempt<StaffPlacementQuestion>(attemptId, questionNumber, signal)
+          : completeQuizAttempt<StaffPlacementQuestion>(attemptId, questionNumber, signal))
+      if (signal.aborted) return
+      if (getAuthToken() !== token) throw new Error("Your account changed. Please reload the quiz.")
+      applyQuizState(nextAttempt)
+      if ("is_correct" in nextAttempt) {
+        setSubmissionResult(nextAttempt.is_correct ? "correct" : "incorrect")
+        setSelectedNote(selectedPositionData?.noteName ?? null)
+      } else {
+        resetPlacement()
+      }
+    }).catch((error) => {
+      if (!signal.aborted) setErrorMessage(error instanceof Error ? error.message : "Unable to update the quiz.")
+    })
+  }
+
+  function submitPlacement() {
+    if (!selectedPositionData || !attempt) return
+    queueQuizAction("answer", selectedPositionData.id)
+  }
+
+  function moveToNextQuestion() {
+    if (!attempt?.answered_correctly) return
+    queueQuizAction(attempt.question_number === attempt.total_questions ? "complete" : "next")
   }
 
   async function startQuiz() {
@@ -391,6 +389,8 @@ export default function StaffPlacementQuiz() {
         throw new Error("Your profile instruments changed. Choose an instrument from the updated list.")
       }
       const session = await startQuizAttempt<StaffPlacementQuestion>("staff_placement", selectedInstrument.instrument_id, controller.signal)
+      quizRequest.current?.abort()
+      quizRequest.current = new AbortController()
       setAttempt(session)
       setQuizStarted(true)
       setQuizFinished(false)
