@@ -258,7 +258,9 @@ export default function ToneRecognitionQuiz() {
   const checkAnswer = (choice: string) => queueQuizAction("answer", choice)
   // Show the timeout as soon as our countdown ends (the server confirms it on Next), but keep real errors visible.
   const timeUp = !answeredCorrectly && questionLocked
-  const shownFeedback = timeUp && (feedback === "" || feedback === "Try again") ? "Time's up" : feedback
+  const shownFeedback = timeUp && ["", "Try again", "Time's up"].includes(feedback)
+    ? `Time's up! It was ${currentNote}`
+    : feedback
   const nextQuestion = () => queueQuizAction(currentQuestion === totalQuestions ? "complete" : "next")
 
   const startQuiz = async () => {
@@ -489,9 +491,12 @@ export default function ToneRecognitionQuiz() {
               onClick={() => checkAnswer(note)}
               disabled={questionLocked}
               className={`text-xl font-bold py-8 rounded-xl border-2 transition-all font-inter
-                ${answeredCorrectly && note === currentNote 
-                  ? 'border-[#6D52A3] bg-purple-50 text-[#6D52A3]' 
-                  : 'border-gray-200 text-gray-700 hover:bg-gray-100 hover:border-gray-300'}
+                ${answeredCorrectly && note === currentNote
+                  ? 'border-[#6D52A3] bg-purple-50 text-[#6D52A3]'
+                  : timeUp && note === currentNote
+                    // Reveal the correct answer after a timeout.
+                    ? 'border-red-500 bg-red-50 text-red-600 disabled:opacity-100'
+                    : 'border-gray-200 text-gray-700 hover:bg-gray-100 hover:border-gray-300'}
               `}
             >
               {note}
