@@ -77,6 +77,12 @@ export type QuizAttempt<Question = ToneRecognitionQuestion> = {
   first_try_correct: number;
   answered_correctly: boolean;
   completed: boolean;
+  // Timing is measured on the server; time_remaining_sec is only for the on-screen countdown.
+  time_limit_sec: number;
+  time_remaining_sec: number;
+  timed_out: boolean;
+  question_score: number | null; // set once the question is answered correctly or times out
+  final_score: number | null;    // set once completed; average points per question, same scale as question_score
 };
 
 export type QuizAnswerResult<Question = ToneRecognitionQuestion> = QuizAttempt<Question> & {

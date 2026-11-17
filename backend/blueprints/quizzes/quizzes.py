@@ -9,6 +9,10 @@ from werkzeug.exceptions import BadRequest, Conflict, HTTPException, NotFound
 
 from ..users.user_db import get_user_by_id
 from . import tone_recognition
+from .attempt_scoring import (
+    TIME_LIMIT_SEC, expire_if_timed_out, finish_attempt, question_done,
+    record_guess, start_question, time_remaining,
+)
 
 
 quizzes = Blueprint("quizzes", __name__)
@@ -46,8 +50,8 @@ def remove_expired_attempts(now):
 
 
 # Called while holding attempt_lock so ownership checks and updates stay together.
-def get_attempt(attempt_id):
-    now = monotonic()
+# `now` is read once per request so timing, expiry and the response all agree.
+def get_attempt(attempt_id, now):
     remove_expired_attempts(now)
     attempt = active_attempts.get(attempt_id)
     if attempt is None or attempt["user_id"] != get_jwt_identity():
@@ -62,7 +66,7 @@ def check_current_question(attempt, number):
 
 
 # Return display state, keeping scoring flags and ownership on the backend.
-def attempt_response(attempt_id, attempt, **extra):
+def attempt_response(attempt_id, attempt, now, **extra):
     return jsonify({
         "attempt_id": attempt_id,
         "quiz_type": attempt["quiz_type"],
@@ -73,6 +77,12 @@ def attempt_response(attempt_id, attempt, **extra):
         "first_try_correct": attempt["first_try_correct"],
         "answered_correctly": attempt["answered_correctly"],
         "completed": attempt["completed"],
+        # Timing is server-side; the client only displays this countdown.
+        "time_limit_sec": attempt["time_limit"],
+        "time_remaining_sec": time_remaining(attempt, now),
+        "timed_out": attempt["timed_out"],
+        "question_score": attempt["question_score"],
+        "final_score": attempt["final_score"],
         **extra,
     })
 
@@ -110,15 +120,16 @@ def start_quiz():
         "instrument_id": instrument_id,
         "question_number": 1,
         "total_questions": module.TOTAL_QUESTIONS,
-        "question": module.generate_question(),
+        "time_limit": TIME_LIMIT_SEC,
         "first_try_correct": 0,
-        "guess_count": 0,
-        "wrong": False,
-        "answered_correctly": False,
+        "question_scores": [],
+        "final_score": None,
         "completed": False,
     }
     with attempt_lock:
         now = monotonic()
+        # Start the clock after the profile lookup, right before the question is sent.
+        start_question(attempt, module.generate_question(), now)
         remove_expired_attempts(now)
         for old_id in list(active_attempts):
             old = active_attempts[old_id]
@@ -126,17 +137,18 @@ def start_quiz():
                 del active_attempts[old_id]
         attempt["last_activity"] = now
         active_attempts[attempt_id] = attempt
-    return attempt_response(attempt_id, attempt), 201
+        return attempt_response(attempt_id, attempt, now), 201
 
 
-# Preserve first-try scoring and allow wrong guesses until the answer is correct.
+# Allow wrong guesses until the answer is correct or the server-side timer runs out.
 @quizzes.post("/<attempt_id>/answer")
 @jwt_required()
 def answer_question(attempt_id):
     data = request_data()
     number = question_number(data)
     with attempt_lock:
-        attempt = get_attempt(attempt_id)
+        now = monotonic()
+        attempt = get_attempt(attempt_id, now)
         check_current_question(attempt, number)
         if attempt["completed"]:
             raise Conflict("This attempt is already completed")
@@ -145,54 +157,45 @@ def answer_question(attempt_id):
             is_correct = module.check_answer(attempt["question"], data.get("answer"))
         except ValueError as error:
             raise BadRequest(str(error)) from error
-        if not attempt["answered_correctly"]:
-            # Count valid guesses for this question, including the correct answer.
-            attempt["guess_count"] += 1
-            if is_correct:
-                if not attempt["wrong"]:
-                    attempt["first_try_correct"] += 1
-                attempt["answered_correctly"] = True
-                attempt["wrong"] = False
-            else:
-                attempt["wrong"] = True
-        return attempt_response(attempt_id, attempt, is_correct=is_correct)
+        record_guess(attempt, data["answer"], is_correct, now)
+        return attempt_response(attempt_id, attempt, now, is_correct=is_correct)
 
-# Get the next question after a correct answer, or repeat the current question if the previous response was lost.
+# Get the next question after a correct answer or a timeout, or repeat the current question if the previous response was lost.
 @quizzes.post("/<attempt_id>/next")
 @jwt_required()
 def next_question(attempt_id):
     number = question_number(request_data())
     with attempt_lock:
-        attempt = get_attempt(attempt_id)
+        now = monotonic()
+        attempt = get_attempt(attempt_id, now)
         if attempt["completed"]:
             raise Conflict("This attempt is already completed")
         # Repeating a Next request after a lost response must not skip a question.
         if number == attempt["question_number"] - 1:
-            return attempt_response(attempt_id, attempt)
+            return attempt_response(attempt_id, attempt, now)
         check_current_question(attempt, number)
-        if not attempt["answered_correctly"]:
-            raise Conflict("Answer correctly before continuing")
+        expire_if_timed_out(attempt, now)
+        if not question_done(attempt):
+            raise Conflict("Answer correctly or wait for the timer before continuing")
         if number == attempt["total_questions"]:
             raise Conflict("Complete the attempt after the final question")
         module = QUIZ_TYPES[attempt["quiz_type"]]
         attempt["question_number"] += 1
-        attempt["question"] = module.generate_question()
-        attempt["guess_count"] = 0
-        attempt["wrong"] = False
-        attempt["answered_correctly"] = False
-        return attempt_response(attempt_id, attempt)
+        start_question(attempt, module.generate_question(), now)
+        return attempt_response(attempt_id, attempt, now)
 
 
-
-# Completion is temporary for now; database persistence will be added separately.
+# Completion computes the final score; database persistence will be added separately.
 @quizzes.post("/<attempt_id>/complete")
 @jwt_required()
 def complete_quiz(attempt_id):
     number = question_number(request_data())
     with attempt_lock:
-        attempt = get_attempt(attempt_id)
+        now = monotonic()
+        attempt = get_attempt(attempt_id, now)
         check_current_question(attempt, number)
-        if number != attempt["total_questions"] or not attempt["answered_correctly"]:
+        expire_if_timed_out(attempt, now)
+        if number != attempt["total_questions"] or not question_done(attempt):
             raise Conflict("Finish every question before completing the quiz")
-        attempt["completed"] = True
-        return attempt_response(attempt_id, attempt)
+        finish_attempt(attempt)
+        return attempt_response(attempt_id, attempt, now)
