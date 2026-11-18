@@ -7,6 +7,57 @@ export type Instrument = {
   name: string;
 };
 
+export type StaffPlacementQuestion = {
+  id: string;
+  display_name: string;
+  letter: string;
+  octave: number;
+  staff: 'treble' | 'bass';
+  position_id: string;
+  hint: string;
+  choices: StaffPlacementChoice[];
+};
+
+export type StaffPlacementChoice = {
+  id: string;
+  label: string;
+  kind: 'line' | 'space';
+  note: string;
+  clef: 'treble' | 'bass';
+  index: number;
+};
+
+export type StaffPlacementInstrumentConfig = {
+  name: string;
+  staffType: 'single' | 'grand';
+  clefs: string;
+  range: string;
+  notationNote: string;
+  layouts: { clef: 'treble' | 'bass'; label: string }[];
+};
+
+export async function getStaffPlacementInstruments(signal?: AbortSignal): Promise<StaffPlacementInstrumentConfig[]> {
+  const response = await fetch(`${BASE_URL}/staff-placement/instruments`, { signal });
+  if (!response.ok) throw new Error('Unable to load staff placement instruments.');
+  const data = await response.json();
+  if (!Array.isArray(data.Instruments)) throw new Error('Unable to load staff placement instruments.');
+  return data.Instruments.map((item: {
+    name: string;
+    staff_type: 'single' | 'grand';
+    clefs: string;
+    range: string;
+    notation_note: string;
+    layouts: { clef: 'treble' | 'bass'; label: string }[];
+  }) => ({
+    name: item.name,
+    staffType: item.staff_type,
+    clefs: item.clefs,
+    range: item.range,
+    notationNote: item.notation_note,
+    layouts: item.layouts,
+  }));
+}
+
 // Public endpoint: instrument choices are needed before an account exists.
 export async function getInstruments(signal?: AbortSignal): Promise<Instrument[]> {
   const response = await fetch(`${BASE_URL}/instruments`, { signal });
