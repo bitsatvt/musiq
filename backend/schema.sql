@@ -1,4 +1,5 @@
 USE music_app_db;
+DROP TABLE IF EXISTS `quiz_attempts`;
 DROP TABLE IF EXISTS `user_instruments`;
 DROP TABLE IF EXISTS `friends`;
 DROP TABLE IF EXISTS `friend_requests`;
@@ -22,9 +23,33 @@ CREATE TABLE `users` (
   `password_hash` varchar(255) NOT NULL,
   `email` varchar(100) NOT NULL,
   `creation_date` timestamp NULL DEFAULT CURRENT_TIMESTAMP,
+  `total_points` bigint unsigned NOT NULL DEFAULT 0,
+  `total_quizzes_completed` bigint unsigned NOT NULL DEFAULT 0,
+  `total_first_try_correct` bigint unsigned NOT NULL DEFAULT 0,
+  `total_questions_answered` bigint unsigned NOT NULL DEFAULT 0,
+  `total_quiz_time_seconds` bigint unsigned NOT NULL DEFAULT 0,
   PRIMARY KEY (`user_id`),
   UNIQUE KEY `username` (`username`),
   UNIQUE KEY `email` (`email`)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
+
+CREATE TABLE `quiz_attempts` (
+  `attempt_id` bigint unsigned NOT NULL AUTO_INCREMENT,
+  `user_id` bigint unsigned NOT NULL,
+  `instrument_id` bigint unsigned NOT NULL,
+  `quiz_type` varchar(50) NOT NULL,
+  `points_earned` bigint unsigned DEFAULT NULL,
+  `first_try_correct` int unsigned DEFAULT NULL,
+  `total_questions` int unsigned NOT NULL,
+  `started_at` datetime NOT NULL,
+  `completed_at` datetime DEFAULT NULL,
+  PRIMARY KEY (`attempt_id`),
+  KEY `fk_quiz_attempts_user` (`user_id`),
+  KEY `fk_quiz_attempts_instrument` (`instrument_id`),
+  CONSTRAINT `fk_quiz_attempts_user` FOREIGN KEY (`user_id`)
+    REFERENCES `users` (`user_id`) ON DELETE CASCADE ON UPDATE RESTRICT,
+  CONSTRAINT `fk_quiz_attempts_instrument` FOREIGN KEY (`instrument_id`)
+    REFERENCES `instruments` (`instrument_id`) ON DELETE RESTRICT ON UPDATE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_0900_ai_ci;
 
 --
